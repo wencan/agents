@@ -9,6 +9,7 @@ import (
 	"cmd/link/internal/ld"
 	"time"
 	"errors"
+	"net"
 )
 
 type agentStream interface {
@@ -30,7 +31,7 @@ func newUnAck(no serial_number) *unAck {
 	}
 }
 
-// reference: https://golang.org/src/io/pipe.go
+// reference: https://golang.org/src/io/self.go
 type StreamPipe struct {
 	raw       agentStream
 
@@ -56,143 +57,143 @@ type StreamPipe struct {
 }
 
 func NewStreamPipe(stream agentStream) *StreamPipe {
-	p := &StreamPipe{
+	pipe := &StreamPipe{
 		raw: stream,
 		ackChecker: time.NewTicker(defaultAckCheckDelay),
 	}
 
-	p.rWait = sync.Cond{L: p.rLocker}
-	p.rWait = sync.Cond{L: p.wLocker}
+	pipe.rWait = sync.Cond{L: pipe.rLocker}
+	pipe.rWait = sync.Cond{L: pipe.wLocker}
 
-	p.waitGroup.Add(3)
-	go p.read_loop()
-	go p.write_loop()
-	go p.ack_check_loop()
+	pipe.waitGroup.Add(3)
+	go pipe.read_loop()
+	go pipe.write_loop()
+	go pipe.ack_check_loop()
 
-	return p
+	return pipe
 }
 
-func (p *StreamPipe) incrSerial() serial_number {
-	p.serial++
-	p.serial = p.serial & ^serial_number(0)
-	return p.serial
+func (self *StreamPipe) incrSerial() serial_number {
+	self.serial++
+	self.serial = self.serial & ^serial_number(0)
+	return self.serial
 }
 
-func (p *StreamPipe) newPacket() *agent.DataPacket {
+func (self *StreamPipe) newPacket() *agent.DataPacket {
 	return &agent.DataPacket{
-		No: p.incrSerial(),
+		No: self.incrSerial(),
 	}
 }
 
-func (p *StreamPipe) read_once() (err error) {
-	packet , err := p.raw.Recv()
+func (self *StreamPipe) read_once() (err error) {
+	packet , err := self.raw.Recv()
 	if err != nil {
 		return err
 	}
 
-	p.rLocker.Lock()
-	defer p.rLocker.Unlock()
+	self.rLocker.Lock()
+	defer self.rLocker.Unlock()
 
-	_, err = p.rBuffer.Write(packet.Buff)
+	_, err = self.rBuffer.Write(packet.Buff)
 	if err != nil {
 		return err
 	}
 
 	for _, ack := range packet.Acks {
-		no, ok := p.pop_unack()
+		no, ok := self.pop_unack()
 		if !ok || ack!=no {
 			return errors.New("ack invaild")
 		}
 	}
 
-	p.acks <- packet.No
+	self.acks <- packet.No
 
-	p.rWait.Signal()
-	p.wWait.Signal()
+	self.rWait.Signal()
+	self.wWait.Signal()
 
 	return nil
 }
 
-func (p *StreamPipe) read_loop() {
-	defer p.waitGroup.Done()
+func (self *StreamPipe) read_loop() {
+	defer self.waitGroup.Done()
 
 	for {
-		if err := p.read_once(); err != nil {
-			p.setErr(err)
+		if err := self.read_once(); err != nil {
+			self.setErr(err)
 			return
 		}
 	}
 }
 
-func (p *StreamPipe) write_loop() {
-	defer p.waitGroup.Done()
+func (self *StreamPipe) write_loop() {
+	defer self.waitGroup.Done()
 
-	p.wLocker.Lock()
-	defer p.wLocker.Unlock()
+	self.wLocker.Lock()
+	defer self.wLocker.Unlock()
 
 	for {
-		if p.getErr() != nil {
+		if self.getErr() != nil {
 			return
 		}
 
-		if p.wBuffer.Len() == 0 && len(p.acks) == 0 {
-			p.wWait.Wait()
+		if self.wBuffer.Len() == 0 && len(self.acks) == 0 {
+			self.wWait.Wait()
 			continue
 		}
 
-		buff := make([]byte, p.wBuffer.Len())
-		_, err := p.wBuffer.Read(buff)
+		buff := make([]byte, self.wBuffer.Len())
+		_, err := self.wBuffer.Read(buff)
 		if err != nil {
-			p.setErr(err)
+			self.setErr(err)
 			return
 		}
 
-		packet := p.newPacket()
+		packet := self.newPacket()
 		packet.Buff = buff
 
 		for {
-			if len(p.acks) == 0 {
+			if len(self.acks) == 0 {
 				break
 			}
-			packet.Acks = append(packet.Acks, <- p.acks)
+			packet.Acks = append(packet.Acks, <- self.acks)
 		}
 
-		err = p.raw.Send(packet)
+		err = self.raw.Send(packet)
 		if err != nil {
-			p.setErr(err)
+			self.setErr(err)
 			return
 		}
-		p.push_unack(packet.No)
+		self.push_unack(packet.No)
 	}
 }
 
-func (p *StreamPipe) push_unack(no serial_number) {
-	p.locker.Lock()
-	defer p.locker.Unlock()
+func (self *StreamPipe) push_unack(no serial_number) {
+	self.locker.Lock()
+	defer self.locker.Unlock()
 
-	p.unacks = append(p.unacks, newUnAck(no))
+	self.unacks = append(self.unacks, newUnAck(no))
 }
 
-func (p *StreamPipe) pop_unack() (no serial_number, ok bool) {
-	p.locker.Lock()
-	defer p.locker.Unlock()
+func (self *StreamPipe) pop_unack() (no serial_number, ok bool) {
+	self.locker.Lock()
+	defer self.locker.Unlock()
 
-	if len(p.unacks) == 0 {
+	if len(self.unacks) == 0 {
 		return 0, false
 	}
 
-	unack := p.unacks[0]
-	p.unacks = p.unacks[1:]
+	unack := self.unacks[0]
+	self.unacks = self.unacks[1:]
 	return unack.no, true
 }
 
-func (p *StreamPipe) ack_check() error {
-	p.locker.Lock()
-	defer p.locker.Unlock()
+func (self *StreamPipe) ack_check() error {
+	self.locker.Lock()
+	defer self.locker.Unlock()
 
 	now := time.Now()
 
-	for _, unack := range p.unacks {
+	for _, unack := range self.unacks {
 		if now.Sub(unack.t) > defaultAckMaxDelay {
 			return errors.New("ack timeout")
 		}
@@ -200,88 +201,88 @@ func (p *StreamPipe) ack_check() error {
 	return nil
 }
 
-func (p *StreamPipe) ack_check_loop() {
-	defer p.waitGroup.Done()
+func (self *StreamPipe) ack_check_loop() {
+	defer self.waitGroup.Done()
 
-	for _ := range p.ackChecker.C {
-		if err := p.ack_check(); err != nil {
-			p.setErr(err)
+	for _ := range self.ackChecker.C {
+		if err := self.ack_check(); err != nil {
+			self.setErr(err)
 			return
 		}
 	}
 }
 
-func (p *StreamPipe) getErr() error {
-	p.locker.Lock()
-	defer p.locker.Unlock()
+func (self *StreamPipe) getErr() error {
+	self.locker.Lock()
+	defer self.locker.Unlock()
 
-	return p.err
+	return self.err
 }
 
-func (p*StreamPipe) setErr(err error) {
-	p.locker.Lock()
-	defer p.locker.Unlock()
+func (self*StreamPipe) setErr(err error) {
+	self.locker.Lock()
+	defer self.locker.Unlock()
 
-	if p.err == nil {
-		p.err = err
+	if self.err == nil {
+		self.err = err
 	}
 }
 
-func (p *StreamPipe) Read(buff []byte) (n int, err error) {
-	p.rLocker.Lock()
-	defer p.rLocker.Unlock()
+func (self *StreamPipe) Read(buff []byte) (n int, err error) {
+	self.rLocker.Lock()
+	defer self.rLocker.Unlock()
 
 	for {
-		if err = p.getErr(); err != nil {
+		if err = self.getErr(); err != nil {
 			return
 		}
 
-		if p.rBuffer.Len() == 0 {
-			p.rWait.Wait()
+		if self.rBuffer.Len() == 0 {
+			self.rWait.Wait()
 			continue
 		}
 	}
 
-	return p.rBuffer.Read(buff)
+	return self.rBuffer.Read(buff)
 }
 
-func (p *StreamPipe) Write(buff []byte) (n int, err error) {
-	p.wLocker.Lock()
-	defer p.wLocker.Unlock()
+func (self *StreamPipe) Write(buff []byte) (n int, err error) {
+	self.wLocker.Lock()
+	defer self.wLocker.Unlock()
 
-	err = p.getErr()
+	err = self.getErr()
 	if err != nil {
 		return 0, nil
 	}
 
-	_, err = p.wBuffer.Write(buff)
+	_, err = self.wBuffer.Write(buff)
 	if err != nil {
 		return 0, err
 	}
 
-	p.wWait.Signal()
+	self.wWait.Signal()
 
 	return
 }
 
-func (p *StreamPipe) CloseWithError(e error) (err error) {
-	p.locker.Lock()
-	defer p.locker.Unlock()
+func (self *StreamPipe) CloseWithError(e error) (err error) {
+	self.locker.Lock()
+	defer self.locker.Unlock()
 
 	if e == nil {
 		e = io.EOF
 	}
-	p.setErr(e)
+	self.setErr(e)
 
-	p.rWait.Signal()
-	p.wWait.Signal()
+	self.rWait.Signal()
+	self.wWait.Signal()
 
-	if s, ok := p.raw.(grpc.ClientStream); ok {
+	if s, ok := self.raw.(grpc.ClientStream); ok {
 		err = s.CloseSend()
 	} else {
-		//wait peer close
+		//waiting peer close
 		for {
-			_, err = p.raw.Recv()
+			_, err = self.raw.Recv()
 			if err != nil {
 				break
 			}
@@ -291,10 +292,66 @@ func (p *StreamPipe) CloseWithError(e error) (err error) {
 		return err
 	}
 
-	p.waitGroup.Wait()
+	self.waitGroup.Wait()
 	return nil
 }
 
-func (p *StreamPipe) Close() (err error) {
-	return p.CloseWithError(nil)
+func (self *StreamPipe) Close() (err error) {
+	return self.CloseWithError(nil)
+}
+
+func (self *StreamPipe) LocalAddr() net.Addr {
+	return &streamPipeAddr(0)
+}
+
+func (self *StreamPipe) RemoteAddr() net.Addr {
+	return &streamPipeAddr(0)
+}
+
+func (self *StreamPipe) SetDeadline(t time.Time) error {
+	return errors.New("deadLine not supported")
+}
+
+func (self *StreamPipe) SetReadDeadline(t time.Time) error {
+	return errors.New("deadLine not supported")
+}
+
+func (self *StreamPipe) SetWriteDeadline(t time.Time) error {
+	return errors.New("deadLine not supported")
+}
+
+type streamPipeAddr int
+
+func (streamPipeAddr) Network() string {
+	return "StreamPipe"
+}
+
+func (streamPipeAddr) String() string {
+	return "StreamPipe"
+}
+
+func Io_exchange(pipe *StreamPipe, proxy net.Conn, done chan struct{}) (err error) {
+	ch := make(chan error, 2)
+
+	go io_copy_until_error(pipe, proxy, ch)
+	go io_copy_until_error(proxy, pipe, ch)
+
+	select {
+	case err = <- ch:	//io error
+		proxy.Close()
+		pipe.CloseWithError(err)
+		<- ch
+	case <- done:	//session done
+		proxy.Close()
+		pipe.Close()
+		<- ch
+		<- ch
+	}
+
+	return err
+}
+
+func io_copy_until_error(a, b io.ReadWriteCloser, ch chan  struct{}) {
+	_, err := io.Copy(a, b)
+	ch <- err
 }

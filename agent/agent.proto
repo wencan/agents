@@ -86,6 +86,6 @@ service Agent {
     rpc Auth(AuthRequest) returns (AuthReply) {}
     rpc Bind(BindRequest) returns (BindReply) {}
     rpc Connect(ConnectRequest) returns (ConnectReply) {}
-    rpc Transfer(stream DataPacket) returns (stream DataPacket) {}
+    rpc Exchange(stream DataPacket) returns (stream DataPacket) {}
     rpc Heartbeat(Ping) returns (Pong) {}
 }

@@ -13,6 +13,7 @@ import (
 	"errors"
 	"encoding/binary"
 	"bytes"
+	"io"
 )
 
 const (
@@ -48,32 +49,46 @@ type AuthChecker interface {
 	UsernameAndPassword(username, password string) bool
 }
 
-type sessionInfo struct {
-	lastKeep   time.Time
+type Session struct {
+	lastKeep time.Time
 	waitAuth bool
 
-	proxies      map[string]net.Conn
+	proxies  map[string]net.Conn
 
-	doneChan   chan error
+	done     chan error
 }
 
-func newSessionInfo() *sessionInfo {
-	return &sessionInfo{
+func NewSessionInfo() *Session {
+	return &Session{
 		lastKeep: time.Now(),
 		waitAuth: true,
 		proxies: make([string]net.Conn),
-		doneChan: make(chan interface{}),
+		done: make(chan struct{}),
 	}
+}
+
+func (s *Session) Keep() {
+	s.lastKeep = time.Now()
+}
+
+func (s *Session) LastKeep() time.Time {
+	return s.lastKeep
+}
+
+func (s *Session) CloseWithError(e error) error {
+
+}
+
+func (s *Session) Close() error {
+
 }
 
 type AgentServer struct {
 	authChecker    AuthChecker
 
 	slocker        sync.Locker
-	sessions       map[string]*sessionInfo
+	sessions       map[string]*Session
 
-	pingMaxDelay   time.Duration //default is DefaultMaxKeepDelay
-	pingCheckDelay time.Duration //default is DefaultKeepCheckDelay
 	pingTicker     *time.Ticker
 }
 
@@ -81,9 +96,7 @@ func NewAgentServer(checker AuthChecker) *AgentServer {
 	server := &AgentServer{
 		authChecker: checker,
 		slocker: sync.Mutex{},
-		sessions: make(map[string]*sessionInfo, 100),
-		pingMaxDelay: defaultPingMaxDelay,
-
+		sessions: make(map[string]*Session, 100),
 		pingTicker: &time.NewTicker(defaultPingCheckDelay),
 	}
 
@@ -93,33 +106,33 @@ func NewAgentServer(checker AuthChecker) *AgentServer {
 }
 
 func (self *AgentServer) Hello(ctx context.Context, req *agent.HelloRequest) (reply *agent.HelloReply, err error) {
-	if req.Major == version_major && req.Minor == version_minor {
-		session := uuid.New()
-
-		sInfo := newSessionInfo()
-
-		reply = &agent.HelloReply{
-			Major: version_major,
-			Minor: version_minor,
-			Session: session,
-		}
-
-		if self.authChecker != nil {
-			sInfo.waitAuth = true
-			reply.AuthMethod = self.authChecker.Type()
-		} else {
-			sInfo.waitAuth = false
-			reply.AuthMethod = agent.AuthMethod_NoAuth
-		}
-
-		self.slocker.Lock()
-		self.sessions[session] = sInfo
-		self.slocker.Unlock()
-
-		return reply, nil
-	} else {
+	if req.Major != version_major && req.Minor != version_minor {
 		return nil, gerr_version_notsupported
 	}
+
+	session := uuid.New()
+	sInfo := NewSessionInfo()
+
+	reply = &agent.HelloReply{
+		Major: version_major,
+		Minor: version_minor,
+		Session: session,
+	}
+
+	if self.authChecker != nil {
+		sInfo.waitAuth = true
+		reply.AuthMethod = self.authChecker.Type()
+	} else {
+		sInfo.waitAuth = false
+		reply.AuthMethod = agent.AuthMethod_NoAuth
+	}
+
+	self.slocker.Lock()
+	defer self.slocker.Unlock()
+
+	self.sessions[session] = sInfo
+
+	return reply, nil
 }
 
 func (self *AgentServer) Auth(ctx context.Context, req *agent.AuthRequest) (reply *agent.AuthReply, err error) {
@@ -148,14 +161,12 @@ func (self *AgentServer) Auth(ctx context.Context, req *agent.AuthRequest) (repl
 	}
 
 	self.slocker.Lock()
+	defer self.slocker.Unlock()
+
 	if sInfo, ok := self.sessions[session]; !ok {
-		err = gerr_session_invaild
+		return nil, gerr_session_invaild
 	} else {
 		sInfo.waitAuth = false
-	}
-	self.slocker.Unlock()
-	if err != nil {
-		return nil, err
 	}
 
 	reply = &agent.AuthReply{
@@ -178,24 +189,21 @@ func (self *AgentServer) Bind(ctx context.Context, req *agent.BindRequest) (repl
 	}
 
 	var session string
-	var sInfo *sessionInfo
+	var sInfo *Session
 
 	self.slocker.Lock()
-	if pSession, ok := self.sessions[parent]; !ok {
-		err = gerr_session_invaild
-	} else if pSession.waitAuth {
-		err = gerr_unauthenticated
-	}else {
-		session = uuid.New()
-		sInfo = newSessionInfo()
-		sInfo.waitAuth = false
+	defer self.slocker.Unlock()
 
-		self.sessions[session] = sInfo
+	if pSession, ok := self.sessions[parent]; !ok {
+		return nil, gerr_session_invaild
+	} else if pSession.waitAuth {
+		return nil, gerr_unauthenticated
 	}
-	self.slocker.Unlock()
-	if err != nil {
-		return nil, err
-	}
+
+	session = uuid.New()
+	sInfo = NewSessionInfo()
+	sInfo.waitAuth = false
+	self.sessions[session] = sInfo
 
 	reply = agent.BindReply{
 		Session: session,
@@ -227,24 +235,28 @@ func (self *AgentServer) Connect(ctx context.Context, req *agent.ConnectRequest)
 		return nil, err
 	}
 
-	if conn, err := net.Dial(req.Remote.Network, req.Remote.Address); err != nil {
+	var conn net.Conn
+	if conn, err = net.Dial(req.Remote.Network, req.Remote.Address); err != nil {
 		return nil, err
+	}
+
+	channel := uuid.New()
+
+	self.slocker.Lock()
+	defer self.slocker.Unlock()
+
+	if sInfo, ok := self.sessions[session]; ok {
+		sInfo.proxies[channel] = conn
 	} else {
-		channel := uuid.New()
+		return nil, gerr_session_invaild
+	}
 
-		self.slocker.Lock()
-		if sInfo, ok := self.sessions[session]; ok {
-			sInfo.proxies[channel] = conn
-		}
-		self.slocker.Unlock()
-
-		reply = &agent.ConnectReply{
-			Channel: channel,
-			Bound: &agent.Address{
-				Network: conn.LocalAddr().Network(),
-				Address: conn.LocalAddr().String(),
-			},
-		}
+	reply = &agent.ConnectReply{
+		Channel: channel,
+		Bound: &agent.Address{
+			Network: conn.LocalAddr().Network(),
+			Address: conn.LocalAddr().String(),
+		},
 	}
 
 	return reply, nil
@@ -252,7 +264,7 @@ func (self *AgentServer) Connect(ctx context.Context, req *agent.ConnectRequest)
 
 //bidirection stream procedure
 //client must ack
-func (self *AgentServer) Transfer(stream agent.Agent_TransferServer) (err error) {
+func (self *AgentServer) Exchange(stream agent.Agent_ExchangeServer) (err error) {
 	var session string
 	var channel string
 	if md, ok := metadata.FromContext(stream.Context()); ok {
@@ -272,14 +284,15 @@ func (self *AgentServer) Transfer(stream agent.Agent_TransferServer) (err error)
 		return gerr_channel_loss
 	}
 
+	var done chan error
 	var proxy net.Conn
-	var done chan interface{}
+
+	//get proxy connection
 	self.slocker.Lock()
 	if sInfo, ok := self.sessions[session]; ok {
-		done = sInfo.doneChan
+		done = sInfo.done
 
-		if conn, ok := sInfo.proxies[channel]; ok {
-			proxy = conn
+		if proxy, ok = sInfo.proxies[channel]; ok {
 			delete(sInfo.proxies, channel)
 		} else {
 			err = gerr_channel_invaild
@@ -288,11 +301,14 @@ func (self *AgentServer) Transfer(stream agent.Agent_TransferServer) (err error)
 		err = gerr_session_invaild
 	}
 	self.slocker.Unlock()
+
 	if err != nil {
 		return err
 	}
 
-	//...
+	pipe := NewStreamPipe(stream)
+
+	return Io_exchange(pipe, proxy, done)
 }
 
 //call procedure
@@ -309,32 +325,37 @@ func (self *AgentServer) Heartbeat(ctx context.Context, ping *agent.Ping) (pong 
 	}
 
 	self.slocker.Lock()
+	defer self.slocker.Unlock()
+
 	if sInfo, ok := self.sessions[session]; !ok {
-		err = gerr_session_invaild
+		return nil, gerr_session_invaild
 	} else {
 		sInfo.lastKeep = time.Now()
-	}
-	self.slocker.Unlock()
-	if err != nil {
-		return nil, err
 	}
 
 	pong = &agent.Pong{
 		AppData: ping.AppData,
 	}
-	return
+	return pong, err
+}
+
+func (self *AgentServer) check() {
+	self.slocker.Lock()
+	defer self.slocker.Unlock()
+
+	now := time.Now()
+
+	for session, sInfo := range self.sessions {
+		if now.Sub(sInfo.lastKeep) > defaultPingMaxDelay {
+			sInfo.done <- gerr_heartbeat_timeout
+			delete(self.sessions, session)
+		}
+	}
 }
 
 func (self *AgentServer) checkLoop() {
-	for now := range self.pingTicker.C {
-		self.slocker.Lock()
-		for session, sInfo := range self.sessions {
-			if now - sInfo.lastKeep > self.pingMaxDelay {
-				sInfo.doneChan <- gerr_heartbeat_timeout
-				delete(self.sessions, session)
-			}
-		}
-		self.slocker.Unlock()
+	for _ := range self.pingTicker.C {
+		self.check()
 	}
 }
 

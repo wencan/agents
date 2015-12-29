@@ -17,11 +17,13 @@ type AgentClient struct {
 	ctx context.Context
 	cancelFunc context.CancelFunc
 
-	waitGroup *sync.WaitGroup
+	waitGroup sync.WaitGroup
 
 	conn agent.AgentClient
 
 	session string
+
+	pingTicker *time.Ticker
 }
 
 func NewAgentClient(ctx context.Context) *AgentClient {
@@ -30,39 +32,52 @@ func NewAgentClient(ctx context.Context) *AgentClient {
 	client := &AgentClient{
 		ctx: ctx,
 		cancelFunc: cancelFunc,
-		waitGroup: &sync.WaitGroup{},
+		pingTicker: time.NewTicker(defaultPingDelay),
 	}
 
 	client.waitGroup.Add(1)
-	go func () {
-		defer client.waitGroup.Done()
-
-		for {
-			select {
-			case ctx.Done():
-				return
-			case <- time.Tick(defaultPingDelay):
-				if err := client.ping(); err != nil {
-					client.cancelFunc()
-					log.Println(err)
-					return
-				}
-			}
-		}
-	}()
+	go client.ping_loop()
 
 	return client
 }
 
-func Dial() (*AgentClient, error) {
+func (client *AgentClient) ping() error {
+	ping := &agent.Ping{
+		AppData: time.Now(),
+	}
 
+	md := metadata.New(map[string][]string{
+		"session": client.session,
+	})
+	ctx := metadata.NewContext(client.ctx, md)
+
+	ctx, _ = context.WithTimeout(ctx, defaultContextTimeout)
+	if pong, err := client.conn.Heartbeat(ctx, ping); err != nil {
+		return err
+	} else if ping.AppData != pong.AppData {
+		return errors.New("pong appData exception")
+	}
+	return nil
 }
 
-func DialTLS() (*AgentClient, error) {
+func (client *AgentClient) ping_loop() {
+	defer client.waitGroup.Done()
 
+	for {
+		select {
+		case <- client.ctx.Done():
+			return
+		case <- client.pingTicker.C :
+			if err := client.ping(); err != nil {
+				log.Println(err)
+				client.cancelFunc()
+				return
+			}
+		}
+	}
 }
 
-func (self *AgentClient) Dial(network, address string) (c net.Conn, err error) {
+func (client *AgentClient) Dial(network, address string) (conn net.Conn, err error) {
 	req := &agent.ConnectRequest{
 		Remote: &agent.Address{
 			Network: network,
@@ -71,41 +86,34 @@ func (self *AgentClient) Dial(network, address string) (c net.Conn, err error) {
 	}
 
 	md := metadata.New(map[string][]string{
-		"session": self.session,
+		"session": client.session,
 	})
-	ctx := metadata.NewContext(self.ctx, md)
-
+	ctx := metadata.NewContext(client.ctx, md)
 	ctx, _ = context.WithTimeout(ctx, defaultContextTimeout)
-	if reply, err := self.conn.Connect(ctx, req); err != nil {
+	var reply *agent.ConnectReply
+	if reply, err = client.conn.Connect(ctx, req); err != nil {
 		return nil, err
-	} else {
-		md := metadata.New(map[string][]string{
-			"session": self.session,
-			"channel": reply.Channel,
-		})
-		ctx := metadata.NewContext(self.ctx, md)
-		if stream, err := self.conn.Transfer(ctx); err != nil {
-			return err
-		} else {
-			//...
-		}
 	}
+
+	md = metadata.New(map[string][]string{
+		"session": client.session,
+		"channel": reply.Channel,
+	})
+	ctx = metadata.NewContext(client.ctx, md)
+	var stream agent.Agent_ExchangeClient
+	if stream, err = client.conn.Exchange(ctx); err != nil {
+		return err
+	}
+	//...
+
+	client.waitGroup.Add(1)
+	defer client.waitGroup.Done()
 }
 
-func (self *AgentClient) ping() error {
-	ping := &agent.Ping{
-		AppData: time.Now(),
-	}
+func (client *AgentClient) Close() error {
+	client.cancelFunc()
 
-	md := metadata.New(map[string][]string{
-		"session": self.session,
-	})
-	ctx := metadata.NewContext(self.ctx, md)
+	client.waitGroup.Wait()
 
-	ctx, _ = context.WithTimeout(ctx, defaultContextTimeout)
-	if pong, err := self.conn.Heartbeat(ctx, ping); err != nil {
-		return err
-	} else if ping.AppData != pong.AppData {
-		return errors.New("pong appData exception")
-	}
+	return nil
 }

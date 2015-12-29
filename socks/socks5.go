@@ -326,7 +326,7 @@ func (self Socks5Server) serve_loop(conn, proxy net.Conn) (err error) {
 	conn.SetReadDeadline(time.Now())
 	proxy.SetReadDeadline(time.Now())
 
-	<- ch	//wait other one exit
+	<- ch	//Waiting for another exit
 	return
 }
 
