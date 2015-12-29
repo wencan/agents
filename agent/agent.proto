@@ -1,0 +1,91 @@
+syntax = "proto3";
+
+package agent;
+
+enum AuthMethod {
+    NoAuth = 0;
+    UsernamePassword = 1;
+}
+
+message HelloRequest {
+    uint32 major = 1;
+    uint32 minor = 2;
+}
+
+message HelloReply {
+    uint32 major = 1;
+    uint32 minor = 2;
+
+    string session = 3; //if no auth
+
+    AuthMethod authMethod = 4;
+
+    repeated string codecs = 5;
+}
+
+//metadata: session
+message AuthRequest {
+    oneof one {
+        UsernameAndPassword usernameAndPassword = 1;
+    }
+}
+
+message UsernameAndPassword {
+    string username = 1;
+    string password = 2;
+}
+
+message AuthReply {
+    string session = 1;
+}
+
+//new connection bind
+//metadata: session
+message BindRequest {
+}
+
+message BindReply {
+    string session = 1;
+}
+
+message Address {
+    string network = 1;
+    string address = 2;
+}
+
+//metadata: session
+message ConnectRequest {
+    Address remote = 1;
+}
+
+message ConnectReply {
+    string channel = 1;
+    Address bound = 2;
+}
+
+//metadata: session, channel, [codec]
+message DataPacket {
+    uint32 No = 1;      //packet sn
+
+    bytes buff = 2;
+
+    repeated uint32 acks = 4;         //packets sn
+}
+
+//metadata: session
+message Ping {
+    string appData = 1;
+}
+
+message Pong {
+    string appData = 1;
+}
+
+service Agent {
+    rpc Hello(HelloRequest) returns (HelloReply) {}
+    rpc Auth(AuthRequest) returns (AuthReply) {}
+    rpc Bind(BindRequest) returns (BindReply) {}
+    rpc Connect(ConnectRequest) returns (ConnectReply) {}
+    rpc Transfer(stream DataPacket) returns (stream DataPacket) {}
+    rpc Heartbeat(Ping) returns (Pong) {}
+}

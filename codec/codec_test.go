@@ -1,0 +1,33 @@
+package codec
+
+import (
+	"../agent"
+	"testing"
+	"code.google.com/p/go-uuid/uuid"
+)
+
+func TestProto(t *testing.T) {
+	uid := uuid.New()
+	t.Log("uuid:", uid)
+
+	ping := &agent.Ping{AppData: uid}
+
+	c, _ := New("snappy")
+	codec, _ := WithProto(c)
+
+	data, err := codec.Marshal(ping)
+	if err != nil {
+		t.Error(err)
+	}
+
+	ping = &agent.Ping{}
+	err = codec.Unmarshal(data, ping)
+	if err != nil {
+		t.Error(err)
+	}
+
+	t.Log("new uuid:", ping.AppData)
+	if ping.AppData != uid {
+		t.Fail()
+	}
+}
