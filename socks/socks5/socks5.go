@@ -1,4 +1,4 @@
-package socks
+package socks5
 
 import (
 	"net"
@@ -14,42 +14,55 @@ import (
 )
 
 //version
-const SOCKS5_VERSION = 0x05
+const Version = 0x05
 
 //methods
 const (
-	SOCKS5_METHOD_NOAUTHENTICATION = iota
-	SOCKS5_METHOD_GSSAPI
-	SOCKS5_METHOD_USERNAMEPASSWORD
-	SOCKS5_METHOD_NOACCEPTABLE = 0xff
+	MethodNoAuthentication = iota
+	MethodGSSAPI
+	MethodUsernamePassword
+	MethodNoAcceptable = 0xff
 )
 
 //CMD
 const (
-	SOCKS5_CMD_CONNECT = iota + 0x01
-	SOCKS5_CMD_BIND
-	SOCKS5_CMD_UDP_ASSOCIATE
+	CMDConnect = iota + 0x01
+	CMDBind
+	CMDUDPAssociate
 )
 
 //address type
 const (
-	SOCKS5_ATYP_IPV4 = iota + 0x01
-	SOCKS5_ATYP_DOMAINNAME
-	SOCKS5_ATYP_IPV6
+	AddrTypeIPv4 = iota + 0x01
+	AddrTypeDomainName
+	AddrTypeIPv6
 )
 
 //reply field
 const (
-	SOCKS5_REP_SUCCEEDED = iota
-	SOCKS5_REP_GENERAL_FAILURE
-	SOCKS5_REP_CONNECTION_NOTALLOWED
-	SOCKS5_REP_NETWORK_UNREACHABLE
-	SOCKS5_REP_HOST_UNREACHABLE
-	SOCKS5_REP_CONNECTION_REFUSED
-	SOCKS5_REP_TTL_EXPIRED
-	SOCKS5_REP_CMD_NOTSUPPORTED
-	SOCKS5_REP_ATYP_NOTSUPPORTED
+	ReplySucceeded = iota
+	ReplyGeneralFailure
+	ReplyConnectionNotAllowed
+	ReplyNetworkUnreachable
+	ReplyHostUnreachable
+	ReplyConnectionRefused
+	ReplyTTLExpired
+	ReplyCMDNotSupported
+	ReplyAddrTypeNotSupported
 )
+
+type Error struct {
+	x     byte
+	error string
+}
+
+func (self Error) Byte() byte {
+	return self.x
+}
+
+func (self Error) Error() string {
+	return self.error
+}
 
 type Socks5Server struct {
 	Dialer proxy.Dialer
@@ -89,24 +102,24 @@ func (self Socks5Server) serve(conn net.Conn) {
 	}()
 
 	var err error
-	if err = self.serve_initialize(conn); err != nil {
+	if err = self.initialize(conn); err != nil {
 		log.Println("Socks5 connection initialize failed,", err)
 		return
 	}
 
 	var proxy net.Conn
-	if proxy, err = self.serve_setup(conn); err != nil {
+	if proxy, err = self.setup(conn); err != nil {
 		log.Println("Socks5 connection setup failed,", err)
 		return
 	}
 	defer proxy.Close()
 
-	if err = self.serve_loop(conn, proxy); err != nil {
+	if err = self.serveloop(conn, proxy); err != nil {
 		log.Println("Socks5 loop error,", err)
 	}
 }
 
-func (self Socks5Server) serve_initialize(conn net.Conn) (err error) {
+func (self Socks5Server) initialize(conn net.Conn) (err error) {
 	//read version, methods field
 	buff := make([]byte, 2)
 	if err = binary.Read(conn, binary.BigEndian, &buff); err != nil {
@@ -114,7 +127,7 @@ func (self Socks5Server) serve_initialize(conn net.Conn) (err error) {
 	}
 
 	ver := buff[0]
-	if ver != SOCKS5_VERSION {
+	if ver != Version {
 		return errors.New("Socks version missmatch")
 	}
 
@@ -124,12 +137,12 @@ func (self Socks5Server) serve_initialize(conn net.Conn) (err error) {
 	if err = binary.Read(conn, binary.BigEndian, &buff); err != nil {
 		return
 	}
-	if ! bytes.Contains(buff, []byte{SOCKS5_METHOD_NOAUTHENTICATION}) {
+	if ! bytes.Contains(buff, []byte{MethodNoAuthentication}) {
 		return errors.New("socks5 methods list invaild")
 	}
 
 	//reply
-	buff = []byte{SOCKS5_VERSION, SOCKS5_METHOD_NOAUTHENTICATION}
+	buff = []byte{Version, MethodNoAuthentication}
 	if err = binary.Write(conn, binary.BigEndian, buff); err != nil {
 		return
 	}
@@ -137,7 +150,7 @@ func (self Socks5Server) serve_initialize(conn net.Conn) (err error) {
 	return
 }
 
-func (self Socks5Server) serve_read_request(conn net.Conn) (network, addr string, err error) {
+func (self Socks5Server) readRequest(conn net.Conn) (network, addr string, err error) {
 	buff := make([]byte, 4)
 	if err = binary.Read(conn, binary.BigEndian, &buff); err != nil {
 		return
@@ -145,15 +158,15 @@ func (self Socks5Server) serve_read_request(conn net.Conn) (network, addr string
 
 	//version
 	ver := buff[0]
-	if ver != SOCKS5_VERSION {
-		err = Error{SOCKS5_REP_GENERAL_FAILURE, "Socks version missmatch"}
+	if ver != Version {
+		err = Error{ReplyGeneralFailure, "Socks version missmatch"}
 		return
 	}
 
 	//cmd
 	cmd := buff[1]
-	if cmd != SOCKS5_CMD_CONNECT {    //Only support CONNECT
-		err = Error{SOCKS5_REP_CMD_NOTSUPPORTED, "Socks 5 command not supported"}
+	if cmd != CMDConnect {    //Only support CONNECT
+		err = Error{ReplyCMDNotSupported, "Socks 5 command not supported"}
 		return
 	}
 
@@ -199,7 +212,7 @@ func (self Socks5Server) serve_read_request(conn net.Conn) (network, addr string
 		host = ip.String()
 
 	default:
-		err = Error{SOCKS5_REP_ATYP_NOTSUPPORTED, "socks5 atyp error"}
+		err = Error{ReplyAddrTypeNotSupported, "socks5 atyp error"}
 		return
 	}
 
@@ -213,12 +226,12 @@ func (self Socks5Server) serve_read_request(conn net.Conn) (network, addr string
 	return
 }
 
-func (self Socks5Server) serve_write_reply(conn net.Conn, addr net.Addr, e error) (err error) {
+func (self Socks5Server) writeReply(conn net.Conn, addr net.Addr, e error) (err error) {
 	if e != nil {
 		if _e, ok := e.(Error); ok {
 			return binary.Write(conn, binary.BigEndian, _e.Byte())
 		} else {
-			return binary.Write(conn, binary.BigEndian, SOCKS5_REP_GENERAL_FAILURE)
+			return binary.Write(conn, binary.BigEndian, ReplyGeneralFailure)
 		}
 	}
 
@@ -254,8 +267,8 @@ func (self Socks5Server) serve_write_reply(conn net.Conn, addr net.Addr, e error
 
 	//write version, rep, reserved, address type
 	head := []byte{
-		SOCKS5_VERSION,
-		SOCKS5_REP_SUCCEEDED,
+		Version,
+		ReplySucceeded,
 		0x00,
 		atyp,
 	}
@@ -283,15 +296,15 @@ func (self Socks5Server) serve_write_reply(conn net.Conn, addr net.Addr, e error
 	return binary.Write(conn, binary.BigEndian, port)
 }
 
-func (self Socks5Server) serve_setup(conn net.Conn) (proxy net.Conn, err error) {
+func (self Socks5Server) setup(conn net.Conn) (proxy net.Conn, err error) {
 	var network, addr string
 
 	//read
-	if network, addr, err = self.serve_read_request(conn); err == nil {
+	if network, addr, err = self.readRequest(conn); err == nil {
 
 		//connect
 		if proxy, err = self.Dialer.Dial(network, addr); err != nil {
-			err = Error{SOCKS5_REP_CONNECTION_REFUSED, err.Error()}
+			err = Error{ReplyConnectionRefused, err.Error()}
 		}
 		defer func() {
 			if err != nil && proxy != nil {
@@ -307,19 +320,19 @@ func (self Socks5Server) serve_setup(conn net.Conn) (proxy net.Conn, err error) 
 	if proxy != nil {
 		laddr = proxy.LocalAddr()
 	}
-	if e = self.serve_write_reply(conn, laddr, err); err == nil && e != nil {
+	if e = self.writeReply(conn, laddr, err); err == nil && e != nil {
 		err = e
 	}
 
 	return
 }
 
-func (self Socks5Server) serve_loop(conn, proxy net.Conn) (err error) {
+func (self Socks5Server) serveloop(conn, proxy net.Conn) (err error) {
 	ch := make(chan error, 2)
 
-	go self.serve_copy_loop(conn, proxy, ch)
+	go self.copyLoop(conn, proxy, ch)
 
-	go self.serve_copy_loop(proxy, conn, ch)
+	go self.copyLoop(proxy, conn, ch)
 
 	err = <-ch
 
@@ -330,7 +343,7 @@ func (self Socks5Server) serve_loop(conn, proxy net.Conn) (err error) {
 	return
 }
 
-func (self Socks5Server) serve_copy_loop(conn1, conn2 net.Conn, ch chan error) {
+func (self Socks5Server) copyLoop(conn1, conn2 net.Conn, ch chan error) {
 	_, err := io.Copy(conn1, conn2)
 	ch <- err
 }

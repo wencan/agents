@@ -68,8 +68,8 @@ func NewStreamPipe(ctx context.Context, stream agentStream) *StreamPipe {
 	pipe.rWait = sync.Cond{L: &pipe.wLocker}
 
 	pipe.waitGroup.Add(3)
-	go pipe.read_loop()
-	go pipe.write_loop()
+	go pipe.readLoop()
+	go pipe.writeLoop()
 	go pipe.loop()
 
 	return pipe
@@ -87,7 +87,7 @@ func (pipe *StreamPipe) newPacket() *agent.DataPacket {
 	}
 }
 
-func (pipe *StreamPipe) read_once() (err error) {
+func (pipe *StreamPipe) readOnce() (err error) {
 	packet, err := pipe.raw.Recv()
 	if err != nil {
 		return err
@@ -102,7 +102,7 @@ func (pipe *StreamPipe) read_once() (err error) {
 	}
 
 	for _, ack := range packet.Acks {
-		no, ok := pipe.pop_unack()
+		no, ok := pipe.popUnack()
 		if !ok || ack != no {
 			return errors.New("ack invaild")
 		}
@@ -116,18 +116,18 @@ func (pipe *StreamPipe) read_once() (err error) {
 	return nil
 }
 
-func (pipe *StreamPipe) read_loop() {
+func (pipe *StreamPipe) readLoop() {
 	defer pipe.waitGroup.Done()
 
 	for {
-		if err := pipe.read_once(); err != nil {
+		if err := pipe.readOnce(); err != nil {
 			pipe.setErr(err)
 			return
 		}
 	}
 }
 
-func (pipe *StreamPipe) write_loop() {
+func (pipe *StreamPipe) writeLoop() {
 	defer pipe.waitGroup.Done()
 
 	pipe.wLocker.Lock()
@@ -165,18 +165,18 @@ func (pipe *StreamPipe) write_loop() {
 			pipe.setErr(err)
 			return
 		}
-		pipe.push_unack(packet.No)
+		pipe.pushUnack(packet.No)
 	}
 }
 
-func (pipe *StreamPipe) push_unack(no uint32) {
+func (pipe *StreamPipe) pushUnack(no uint32) {
 	pipe.locker.Lock()
 	defer pipe.locker.Unlock()
 
 	pipe.unacks = append(pipe.unacks, newUnAck(no))
 }
 
-func (pipe *StreamPipe) pop_unack() (no uint32, ok bool) {
+func (pipe *StreamPipe) popUnack() (no uint32, ok bool) {
 	pipe.locker.Lock()
 	defer pipe.locker.Unlock()
 
@@ -189,17 +189,18 @@ func (pipe *StreamPipe) pop_unack() (no uint32, ok bool) {
 	return unack.no, true
 }
 
-func (pipe *StreamPipe) ack_check() error {
+func (pipe *StreamPipe) ackCheck() error {
 	pipe.locker.Lock()
 	defer pipe.locker.Unlock()
 
-	now := time.Now()
-
-	for _, unack := range pipe.unacks {
-		if now.Sub(unack.t) > defaultAckMaxDelay {
-			return errors.New("ack timeout")
-		}
+	if len(pipe.unacks) == 0 {
+		return nil
 	}
+
+	if time.Now().Sub(pipe.unacks[0].t) > defaultAckCheckDelay {
+		return errors.New("ack timeout")
+	}
+
 	return nil
 }
 
@@ -209,7 +210,7 @@ func (pipe *StreamPipe) loop() {
 	for {
 		select {
 		case <-pipe.ackChecker.C:
-			if err := pipe.ack_check(); err != nil {
+			if err := pipe.ackCheck(); err != nil {
 				pipe.setErr(err)
 				return
 			}
@@ -338,11 +339,11 @@ func (streamPipeAddr) String() string {
 	return "StreamPipe"
 }
 
-func Io_exchange(pipe *StreamPipe, proxy net.Conn, done chan struct{}) (err error) {
+func IoExchange(pipe *StreamPipe, proxy net.Conn, done chan struct{}) (err error) {
 	ch := make(chan error, 2)
 
-	go io_copy_until_error(pipe, proxy, ch)
-	go io_copy_until_error(proxy, pipe, ch)
+	go ioCopyUntilError(pipe, proxy, ch)
+	go ioCopyUntilError(proxy, pipe, ch)
 
 	select {
 	case err = <-ch:
@@ -361,7 +362,7 @@ func Io_exchange(pipe *StreamPipe, proxy net.Conn, done chan struct{}) (err erro
 	return err
 }
 
-func io_copy_until_error(a, b io.ReadWriteCloser, ch chan error) {
+func ioCopyUntilError(a, b io.ReadWriteCloser, ch chan error) {
 	_, err := io.Copy(a, b)
 	ch <- err
 }

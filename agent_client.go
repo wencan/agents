@@ -34,7 +34,7 @@ func NewAgentClient(ctx context.Context) *AgentClient {
 	}
 
 	client.waitGroup.Add(1)
-	go client.ping_loop()
+	go client.pingLoop()
 
 	return client
 }
@@ -58,7 +58,7 @@ func (client *AgentClient) ping() error {
 	return nil
 }
 
-func (client *AgentClient) ping_loop() {
+func (client *AgentClient) pingLoop() {
 	defer client.waitGroup.Done()
 
 	for {

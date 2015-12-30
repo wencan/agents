@@ -13,8 +13,8 @@ import (
 )
 
 const (
-	version_major uint32 = 1;
-	version_minor uint32 = 0;
+	versionMajor uint32 = 1;
+	versionMinor uint32 = 0;
 
 	defaultContextTimeout time.Duration = 10 * time.Second
 
@@ -27,17 +27,17 @@ const (
 )
 
 var (
-	gerr_version_notsupported = grpc.Errorf(codes.Aborted, "version not supported")
-	gerr_session_loss error = grpc.Errorf(codes.DataLoss, "session loss")
-	gerr_channel_loss error = grpc.Errorf(codes.DataLoss, "channel loss")
-	gerr_session_invaild error = grpc.Errorf(codes.PermissionDenied, "session invaild")
-	gerr_channel_invaild error = grpc.Errorf(codes.PermissionDenied, "channel invaild")
-	gerr_unauthenticated error = grpc.Errorf(codes.PermissionDenied, "unauthenticated or authenticate fail")
-	gerr_heartbeat_timeout error = grpc.Errorf(codes.DeadlineExceeded, "heartbeat timeout")
-	gerr_network_notsupported = grpc.Errorf(codes.Canceled, "network type not supported")
-	gerr_sesson_ended error = grpc.Errorf(codes.Canceled, "session ended")
-	gerr_ack_timeout error = grpc.Errorf(codes.Canceled, "ack timeout")
-	gerr_other = grpc.Errorf(codes.Canceled, "other...")
+	gerrVersionNotSupported = grpc.Errorf(codes.Aborted, "version not supported")
+	gerrSessionLoss error = grpc.Errorf(codes.DataLoss, "session loss")
+	gerrChannelLoss error = grpc.Errorf(codes.DataLoss, "channel loss")
+	gerrSessionInvaild error = grpc.Errorf(codes.PermissionDenied, "session invaild")
+	gerrChannelInvaild error = grpc.Errorf(codes.PermissionDenied, "channel invaild")
+	gerrUnauthenticated error = grpc.Errorf(codes.PermissionDenied, "unauthenticated or authenticate fail")
+	gerrHeartbeatTimeout error = grpc.Errorf(codes.DeadlineExceeded, "heartbeat timeout")
+	gerrNetworkNotSupported = grpc.Errorf(codes.Canceled, "network type not supported")
+	gerrSessonEnded error = grpc.Errorf(codes.Canceled, "session ended")
+	gerrAckTimeout error = grpc.Errorf(codes.Canceled, "ack timeout")
+	gerrOther = grpc.Errorf(codes.Canceled, "other...")
 )
 
 type Guard interface {
@@ -85,16 +85,16 @@ func NewAgentServer(guard Guard) *AgentServer {
 }
 
 func (srv *AgentServer) Hello(ctx context.Context, req *agent.HelloRequest) (reply *agent.HelloReply, err error) {
-	if req.Major != version_major && req.Minor != version_minor {
-		return nil, gerr_version_notsupported
+	if req.Major != versionMajor && req.Minor != versionMinor {
+		return nil, gerrVersionNotSupported
 	}
 
 	session := uuid.New()
 	sInfo := NewSessionInfo()
 
 	reply = &agent.HelloReply{
-		Major: version_major,
-		Minor: version_minor,
+		Major: versionMajor,
+		Minor: versionMinor,
 		Session: session,
 	}
 
@@ -123,7 +123,7 @@ func (srv *AgentServer) Auth(ctx context.Context, req *agent.AuthRequest) (reply
 		}
 	}
 	if session == "" {
-		return nil, gerr_session_loss
+		return nil, gerrSessionLoss
 	}
 
 	if srv.guard != nil {
@@ -132,17 +132,17 @@ func (srv *AgentServer) Auth(ctx context.Context, req *agent.AuthRequest) (reply
 			ok = srv.guard.UsernameAndPassword(up.Username, up.Password)
 		}
 		if !ok {
-			return nil, gerr_unauthenticated
+			return nil, gerrUnauthenticated
 		}
 	} else {
-		return nil, gerr_other
+		return nil, gerrOther
 	}
 
 	srv.slocker.Lock()
 	defer srv.slocker.Unlock()
 
 	if sInfo, ok := srv.sessions[session]; !ok {
-		return nil, gerr_session_invaild
+		return nil, gerrSessionInvaild
 	} else {
 		sInfo.waitAuth = false
 	}
@@ -163,7 +163,7 @@ func (srv *AgentServer) Bind(ctx context.Context, req *agent.BindRequest) (reply
 		}
 	}
 	if parent == "" {
-		return nil, gerr_session_loss
+		return nil, gerrSessionLoss
 	}
 
 	var session string
@@ -173,9 +173,9 @@ func (srv *AgentServer) Bind(ctx context.Context, req *agent.BindRequest) (reply
 	defer srv.slocker.Unlock()
 
 	if pSession, ok := srv.sessions[parent]; !ok {
-		return nil, gerr_session_invaild
+		return nil, gerrSessionInvaild
 	} else if pSession.waitAuth {
-		return nil, gerr_unauthenticated
+		return nil, gerrUnauthenticated
 	}
 
 	session = uuid.New()
@@ -199,14 +199,14 @@ func (srv *AgentServer) Connect(ctx context.Context, req *agent.ConnectRequest) 
 		}
 	}
 	if session == "" {
-		return nil, gerr_session_loss
+		return nil, gerrSessionLoss
 	}
 
 	srv.slocker.Lock()
 	if sInfo, ok := srv.sessions[session]; !ok {
-		err = gerr_session_invaild
+		err = gerrSessionInvaild
 	} else if sInfo.waitAuth {
-		err = gerr_unauthenticated
+		err = gerrUnauthenticated
 	}
 	srv.slocker.Unlock()
 	if err != nil {
@@ -226,7 +226,7 @@ func (srv *AgentServer) Connect(ctx context.Context, req *agent.ConnectRequest) 
 	if sInfo, ok := srv.sessions[session]; ok {
 		sInfo.proxies[channel] = conn
 	} else {
-		return nil, gerr_session_invaild
+		return nil, gerrSessionInvaild
 	}
 
 	reply = &agent.ConnectReply{
@@ -256,10 +256,10 @@ func (srv *AgentServer) Exchange(stream agent.Agent_ExchangeServer) (err error) 
 		}
 	}
 	if session == "" {
-		return gerr_session_loss
+		return gerrSessionLoss
 	}
 	if channel == "" {
-		return gerr_channel_loss
+		return gerrChannelLoss
 	}
 
 	var done chan struct{}
@@ -273,10 +273,10 @@ func (srv *AgentServer) Exchange(stream agent.Agent_ExchangeServer) (err error) 
 		if proxy, ok = sInfo.proxies[channel]; ok {
 			delete(sInfo.proxies, channel)
 		} else {
-			err = gerr_channel_invaild
+			err = gerrChannelInvaild
 		}
 	} else {
-		err = gerr_session_invaild
+		err = gerrSessionInvaild
 	}
 	srv.slocker.Unlock()
 
@@ -288,7 +288,7 @@ func (srv *AgentServer) Exchange(stream agent.Agent_ExchangeServer) (err error) 
 
 	//proxy
 	//until error(contain eof)
-	return Io_exchange(pipe, proxy, done)
+	return IoExchange(pipe, proxy, done)
 }
 
 //call procedure
@@ -301,14 +301,14 @@ func (srv *AgentServer) Heartbeat(ctx context.Context, ping *agent.Ping) (pong *
 		}
 	}
 	if session == "" {
-		return nil, gerr_session_loss
+		return nil, gerrSessionLoss
 	}
 
 	srv.slocker.Lock()
 	defer srv.slocker.Unlock()
 
 	if sInfo, ok := srv.sessions[session]; !ok {
-		return nil, gerr_session_invaild
+		return nil, gerrSessionInvaild
 	} else {
 		sInfo.lastKeep = time.Now()
 	}
@@ -328,14 +328,14 @@ func (srv *AgentServer) Bye(ctx context.Context, req *agent.Empty) (reply *agent
 		}
 	}
 	if session == "" {
-		return nil, gerr_session_loss
+		return nil, gerrSessionLoss
 	}
 
 	srv.slocker.Lock()
 	defer srv.slocker.Unlock()
 
 	if sInfo, ok := srv.sessions[session]; !ok {
-		return nil, gerr_session_invaild
+		return nil, gerrSessionInvaild
 	} else {
 		close(sInfo.done)
 		delete(srv.sessions, session)
@@ -344,7 +344,7 @@ func (srv *AgentServer) Bye(ctx context.Context, req *agent.Empty) (reply *agent
 	return &agent.Empty{}, err
 }
 
-func (srv *AgentServer) check() {
+func (srv *AgentServer) checkAndRemove() {
 	srv.slocker.Lock()
 	defer srv.slocker.Unlock()
 
@@ -361,7 +361,7 @@ func (srv *AgentServer) check() {
 
 func (srv *AgentServer) checkLoop() {
 	for _ = range srv.pingTicker.C {
-		srv.check()
+		srv.checkAndRemove()
 	}
 }
 
