@@ -75,7 +75,7 @@ type AgentServer struct {
 func NewAgentServer(guard Guard) *AgentServer {
 	server := &AgentServer{
 		guard: guard,
-		sessions: make(map[string]*Session, 100),
+		sessions: make(map[string]*Session, 10),
 		pingTicker: time.NewTicker(defaultPingCheckDelay),
 	}
 
@@ -317,6 +317,31 @@ func (self *AgentServer) Heartbeat(ctx context.Context, ping *agent.Ping) (pong 
 		AppData: ping.AppData,
 	}
 	return pong, err
+}
+
+func (self *AgentServer) Bye(ctx context.Context, req *agent.Empty) (reply *agent.Empty, err error) {
+	var session string
+	if md, ok := metadata.FromContext(ctx); ok {
+		ss := md["session"]
+		if len(ss) >= 1 {
+			session = ss[0]
+		}
+	}
+	if session == "" {
+		return nil, gerr_session_loss
+	}
+
+	self.slocker.Lock()
+	defer self.slocker.Unlock()
+
+	if sInfo, ok := self.sessions[session]; !ok {
+		return nil, gerr_session_invaild
+	} else {
+		close(sInfo.done)
+		delete(self.sessions, session)
+	}
+
+	return &agent.Empty{}, err
 }
 
 func (self *AgentServer) check() {

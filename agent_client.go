@@ -106,9 +106,13 @@ func (client *AgentClient) Dial(network, address string) (conn net.Conn, err err
 	return NewStreamPipe(stream), nil
 }
 
-func (client *AgentClient) Close() error {
-	client.cancelFunc()
+func (client *AgentClient) Close() (err error) {
+	req := &agent.Empty{}
+	if _, err = client.conn.Bye(client.ctx, req); err != nil {
+		return err
+	}
 
+	client.cancelFunc()
 	client.waitGroup.Wait()
 
 	return nil
