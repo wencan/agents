@@ -2,7 +2,7 @@ package codec
 
 import "github.com/golang/snappy"
 
-type Snappy struct {}
+type Snappy struct{}
 
 func (Snappy) Encode(dst, src []byte) ([]byte, error) {
 	return snappy.Encode(dst, src), nil

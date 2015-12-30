@@ -12,21 +12,21 @@ import (
 )
 
 type AgentClient struct {
-	ctx context.Context
+	ctx        context.Context
 	cancelFunc context.CancelFunc
 
-	waitGroup sync.WaitGroup
+	waitGroup  sync.WaitGroup
 
-	conn agent.AgentClient
+	conn       agent.AgentClient
 
-	session string
+	session    string
 
 	pingTicker *time.Ticker
 }
 
 func NewAgentClient(ctx context.Context) *AgentClient {
 	var cancelFunc context.CancelFunc
-	ctx , cancelFunc = context.WithCancel(ctx)
+	ctx, cancelFunc = context.WithCancel(ctx)
 	client := &AgentClient{
 		ctx: ctx,
 		cancelFunc: cancelFunc,
@@ -63,9 +63,9 @@ func (client *AgentClient) ping_loop() {
 
 	for {
 		select {
-		case <- client.ctx.Done():
+		case <-client.ctx.Done():
 			return
-		case <- client.pingTicker.C :
+		case <-client.pingTicker.C:
 			if err := client.ping(); err != nil {
 				log.Println(err)
 				client.cancelFunc()
@@ -103,7 +103,7 @@ func (client *AgentClient) Dial(network, address string) (conn net.Conn, err err
 		return nil, err
 	}
 
-	return NewStreamPipe(stream), nil
+	return NewStreamPipe(client.ctx, stream), nil
 }
 
 func (client *AgentClient) Close() (err error) {

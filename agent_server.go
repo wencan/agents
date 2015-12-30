@@ -16,12 +16,12 @@ const (
 	version_major uint32 = 1;
 	version_minor uint32 = 0;
 
-	defaultContextTimeout time.Duration = 10 *time.Second
+	defaultContextTimeout time.Duration = 10 * time.Second
 
 	defaultPingDelay time.Duration = 60 * time.Second
 	defaultPingMaxDelay time.Duration = 120 * time.Second
 	defaultPingCheckDelay time.Duration = time.Minute
-	defaultPacketBytesMaxLen int = 1024 * 1024 *512
+	defaultPacketBytesMaxLen int = 1024 * 1024 * 512
 	defaultAckMaxDelay time.Duration = 10 * time.Second
 	defaultAckCheckDelay time.Duration = 10 * time.Second
 )
@@ -64,7 +64,7 @@ func NewSessionInfo() *Session {
 }
 
 type AgentServer struct {
-	guard      Guard	//auth
+	guard      Guard //auth
 
 	slocker    sync.Mutex
 	sessions   map[string]*Session
@@ -73,18 +73,18 @@ type AgentServer struct {
 }
 
 func NewAgentServer(guard Guard) *AgentServer {
-	server := &AgentServer{
+	srv := &AgentServer{
 		guard: guard,
 		sessions: make(map[string]*Session, 10),
 		pingTicker: time.NewTicker(defaultPingCheckDelay),
 	}
 
-	go server.checkLoop()
+	go srv.checkLoop()
 
-	return server
+	return srv
 }
 
-func (self *AgentServer) Hello(ctx context.Context, req *agent.HelloRequest) (reply *agent.HelloReply, err error) {
+func (srv *AgentServer) Hello(ctx context.Context, req *agent.HelloRequest) (reply *agent.HelloReply, err error) {
 	if req.Major != version_major && req.Minor != version_minor {
 		return nil, gerr_version_notsupported
 	}
@@ -98,23 +98,23 @@ func (self *AgentServer) Hello(ctx context.Context, req *agent.HelloRequest) (re
 		Session: session,
 	}
 
-	if self.guard != nil {
+	if srv.guard != nil {
 		sInfo.waitAuth = true
-		reply.AuthMethod = self.guard.Type()
+		reply.AuthMethod = srv.guard.Type()
 	} else {
 		sInfo.waitAuth = false
 		reply.AuthMethod = agent.AuthMethod_NoAuth
 	}
 
-	self.slocker.Lock()
-	defer self.slocker.Unlock()
+	srv.slocker.Lock()
+	defer srv.slocker.Unlock()
 
-	self.sessions[session] = sInfo
+	srv.sessions[session] = sInfo
 
 	return reply, nil
 }
 
-func (self *AgentServer) Auth(ctx context.Context, req *agent.AuthRequest) (reply *agent.AuthReply, err error) {
+func (srv *AgentServer) Auth(ctx context.Context, req *agent.AuthRequest) (reply *agent.AuthReply, err error) {
 	var session string
 	if md, ok := metadata.FromContext(ctx); ok {
 		ss := md["session"]
@@ -126,10 +126,10 @@ func (self *AgentServer) Auth(ctx context.Context, req *agent.AuthRequest) (repl
 		return nil, gerr_session_loss
 	}
 
-	if self.guard != nil {
+	if srv.guard != nil {
 		ok := false
 		if up := req.GetUsernameAndPassword(); up != nil {
-			ok = self.guard.UsernameAndPassword(up.Username, up.Password)
+			ok = srv.guard.UsernameAndPassword(up.Username, up.Password)
 		}
 		if !ok {
 			return nil, gerr_unauthenticated
@@ -138,10 +138,10 @@ func (self *AgentServer) Auth(ctx context.Context, req *agent.AuthRequest) (repl
 		return nil, gerr_other
 	}
 
-	self.slocker.Lock()
-	defer self.slocker.Unlock()
+	srv.slocker.Lock()
+	defer srv.slocker.Unlock()
 
-	if sInfo, ok := self.sessions[session]; !ok {
+	if sInfo, ok := srv.sessions[session]; !ok {
 		return nil, gerr_session_invaild
 	} else {
 		sInfo.waitAuth = false
@@ -154,7 +154,7 @@ func (self *AgentServer) Auth(ctx context.Context, req *agent.AuthRequest) (repl
 	return reply, nil
 }
 
-func (self *AgentServer) Bind(ctx context.Context, req *agent.BindRequest) (reply *agent.BindReply, err error) {
+func (srv *AgentServer) Bind(ctx context.Context, req *agent.BindRequest) (reply *agent.BindReply, err error) {
 	var parent string
 	if md, ok := metadata.FromContext(ctx); ok {
 		ss := md["session"]
@@ -169,10 +169,10 @@ func (self *AgentServer) Bind(ctx context.Context, req *agent.BindRequest) (repl
 	var session string
 	var sInfo *Session
 
-	self.slocker.Lock()
-	defer self.slocker.Unlock()
+	srv.slocker.Lock()
+	defer srv.slocker.Unlock()
 
-	if pSession, ok := self.sessions[parent]; !ok {
+	if pSession, ok := srv.sessions[parent]; !ok {
 		return nil, gerr_session_invaild
 	} else if pSession.waitAuth {
 		return nil, gerr_unauthenticated
@@ -181,7 +181,7 @@ func (self *AgentServer) Bind(ctx context.Context, req *agent.BindRequest) (repl
 	session = uuid.New()
 	sInfo = NewSessionInfo()
 	sInfo.waitAuth = false
-	self.sessions[session] = sInfo
+	srv.sessions[session] = sInfo
 
 	reply = &agent.BindReply{
 		Session: session,
@@ -190,7 +190,7 @@ func (self *AgentServer) Bind(ctx context.Context, req *agent.BindRequest) (repl
 	return reply, nil
 }
 
-func (self *AgentServer) Connect(ctx context.Context, req *agent.ConnectRequest) (reply *agent.ConnectReply, err error) {
+func (srv *AgentServer) Connect(ctx context.Context, req *agent.ConnectRequest) (reply *agent.ConnectReply, err error) {
 	var session string
 	if md, ok := metadata.FromContext(ctx); ok {
 		ss := md["session"]
@@ -202,13 +202,13 @@ func (self *AgentServer) Connect(ctx context.Context, req *agent.ConnectRequest)
 		return nil, gerr_session_loss
 	}
 
-	self.slocker.Lock()
-	if sInfo, ok := self.sessions[session]; !ok {
+	srv.slocker.Lock()
+	if sInfo, ok := srv.sessions[session]; !ok {
 		err = gerr_session_invaild
 	} else if sInfo.waitAuth {
 		err = gerr_unauthenticated
 	}
-	self.slocker.Unlock()
+	srv.slocker.Unlock()
 	if err != nil {
 		return nil, err
 	}
@@ -220,10 +220,10 @@ func (self *AgentServer) Connect(ctx context.Context, req *agent.ConnectRequest)
 
 	channel := uuid.New()
 
-	self.slocker.Lock()
-	defer self.slocker.Unlock()
+	srv.slocker.Lock()
+	defer srv.slocker.Unlock()
 
-	if sInfo, ok := self.sessions[session]; ok {
+	if sInfo, ok := srv.sessions[session]; ok {
 		sInfo.proxies[channel] = conn
 	} else {
 		return nil, gerr_session_invaild
@@ -242,7 +242,7 @@ func (self *AgentServer) Connect(ctx context.Context, req *agent.ConnectRequest)
 
 //bidirection stream procedure
 //client must ack
-func (self *AgentServer) Exchange(stream agent.Agent_ExchangeServer) (err error) {
+func (srv *AgentServer) Exchange(stream agent.Agent_ExchangeServer) (err error) {
 	var session string
 	var channel string
 	if md, ok := metadata.FromContext(stream.Context()); ok {
@@ -266,8 +266,8 @@ func (self *AgentServer) Exchange(stream agent.Agent_ExchangeServer) (err error)
 	var proxy net.Conn
 
 	//get proxy connection
-	self.slocker.Lock()
-	if sInfo, ok := self.sessions[session]; ok {
+	srv.slocker.Lock()
+	if sInfo, ok := srv.sessions[session]; ok {
 		done = sInfo.done
 
 		if proxy, ok = sInfo.proxies[channel]; ok {
@@ -278,13 +278,13 @@ func (self *AgentServer) Exchange(stream agent.Agent_ExchangeServer) (err error)
 	} else {
 		err = gerr_session_invaild
 	}
-	self.slocker.Unlock()
+	srv.slocker.Unlock()
 
 	if err != nil {
 		return err
 	}
 
-	pipe := NewStreamPipe(stream)
+	pipe := NewStreamPipe(context.Background(), stream)
 
 	//proxy
 	//until error(contain eof)
@@ -292,7 +292,7 @@ func (self *AgentServer) Exchange(stream agent.Agent_ExchangeServer) (err error)
 }
 
 //call procedure
-func (self *AgentServer) Heartbeat(ctx context.Context, ping *agent.Ping) (pong *agent.Pong, err error) {
+func (srv *AgentServer) Heartbeat(ctx context.Context, ping *agent.Ping) (pong *agent.Pong, err error) {
 	var session string
 	if md, ok := metadata.FromContext(ctx); ok {
 		ss := md["session"]
@@ -304,10 +304,10 @@ func (self *AgentServer) Heartbeat(ctx context.Context, ping *agent.Ping) (pong 
 		return nil, gerr_session_loss
 	}
 
-	self.slocker.Lock()
-	defer self.slocker.Unlock()
+	srv.slocker.Lock()
+	defer srv.slocker.Unlock()
 
-	if sInfo, ok := self.sessions[session]; !ok {
+	if sInfo, ok := srv.sessions[session]; !ok {
 		return nil, gerr_session_invaild
 	} else {
 		sInfo.lastKeep = time.Now()
@@ -319,7 +319,7 @@ func (self *AgentServer) Heartbeat(ctx context.Context, ping *agent.Ping) (pong 
 	return pong, err
 }
 
-func (self *AgentServer) Bye(ctx context.Context, req *agent.Empty) (reply *agent.Empty, err error) {
+func (srv *AgentServer) Bye(ctx context.Context, req *agent.Empty) (reply *agent.Empty, err error) {
 	var session string
 	if md, ok := metadata.FromContext(ctx); ok {
 		ss := md["session"]
@@ -331,37 +331,37 @@ func (self *AgentServer) Bye(ctx context.Context, req *agent.Empty) (reply *agen
 		return nil, gerr_session_loss
 	}
 
-	self.slocker.Lock()
-	defer self.slocker.Unlock()
+	srv.slocker.Lock()
+	defer srv.slocker.Unlock()
 
-	if sInfo, ok := self.sessions[session]; !ok {
+	if sInfo, ok := srv.sessions[session]; !ok {
 		return nil, gerr_session_invaild
 	} else {
 		close(sInfo.done)
-		delete(self.sessions, session)
+		delete(srv.sessions, session)
 	}
 
 	return &agent.Empty{}, err
 }
 
-func (self *AgentServer) check() {
-	self.slocker.Lock()
-	defer self.slocker.Unlock()
+func (srv *AgentServer) check() {
+	srv.slocker.Lock()
+	defer srv.slocker.Unlock()
 
 	now := time.Now()
 
-	for session, sInfo := range self.sessions {
+	for session, sInfo := range srv.sessions {
 		if now.Sub(sInfo.lastKeep) > defaultPingMaxDelay {
 			//sInfo.done <- gerr_heartbeat_timeout
 			close(sInfo.done)
-			delete(self.sessions, session)
+			delete(srv.sessions, session)
 		}
 	}
 }
 
-func (self *AgentServer) checkLoop() {
-	for _ = range self.pingTicker.C {
-		self.check()
+func (srv *AgentServer) checkLoop() {
+	for _ = range srv.pingTicker.C {
+		srv.check()
 	}
 }
 

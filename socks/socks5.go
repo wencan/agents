@@ -18,29 +18,29 @@ const SOCKS5_VERSION = 0x05
 
 //methods
 const (
-	SOCKS5_METHOD_NOAUTHENTICATION	= iota
+	SOCKS5_METHOD_NOAUTHENTICATION = iota
 	SOCKS5_METHOD_GSSAPI
 	SOCKS5_METHOD_USERNAMEPASSWORD
-	SOCKS5_METHOD_NOACCEPTABLE		= 0xff
+	SOCKS5_METHOD_NOACCEPTABLE = 0xff
 )
 
 //CMD
 const (
-	SOCKS5_CMD_CONNECT		= iota + 0x01
+	SOCKS5_CMD_CONNECT = iota + 0x01
 	SOCKS5_CMD_BIND
 	SOCKS5_CMD_UDP_ASSOCIATE
 )
 
 //address type
 const (
-	SOCKS5_ATYP_IPV4		= iota + 0x01
+	SOCKS5_ATYP_IPV4 = iota + 0x01
 	SOCKS5_ATYP_DOMAINNAME
 	SOCKS5_ATYP_IPV6
 )
 
 //reply field
 const (
-	SOCKS5_REP_SUCCEEDED	= iota
+	SOCKS5_REP_SUCCEEDED = iota
 	SOCKS5_REP_GENERAL_FAILURE
 	SOCKS5_REP_CONNECTION_NOTALLOWED
 	SOCKS5_REP_NETWORK_UNREACHABLE
@@ -76,7 +76,7 @@ func (self Socks5Server) Serve(listener net.Listener) (err error) {
 }
 
 func (self Socks5Server) serve(conn net.Conn) {
-	defer func () {
+	defer func() {
 		conn.Close()
 
 		if r := recover(); r != nil {
@@ -86,7 +86,7 @@ func (self Socks5Server) serve(conn net.Conn) {
 			runtime.Stack(buff, false)
 			log.Println(string(buff))
 		}
-	} ()
+	}()
 
 	var err error
 	if err = self.serve_initialize(conn); err != nil {
@@ -152,7 +152,7 @@ func (self Socks5Server) serve_read_request(conn net.Conn) (network, addr string
 
 	//cmd
 	cmd := buff[1]
-	if cmd != SOCKS5_CMD_CONNECT {	//Only support CONNECT
+	if cmd != SOCKS5_CMD_CONNECT {    //Only support CONNECT
 		err = Error{SOCKS5_REP_CMD_NOTSUPPORTED, "Socks 5 command not supported"}
 		return
 	}
@@ -163,7 +163,7 @@ func (self Socks5Server) serve_read_request(conn net.Conn) (network, addr string
 	//read address
 	var host string
 	switch atyp {
-	case 0x01:	//IPv4
+	case 0x01:    //IPv4
 		network = "tcp4"
 
 		ip := make(net.IP, 4)
@@ -173,7 +173,7 @@ func (self Socks5Server) serve_read_request(conn net.Conn) (network, addr string
 
 		host = ip.String()
 
-	case 0x03:	//domain
+	case 0x03:    //domain
 		network = "tcp"
 
 		var len byte
@@ -188,7 +188,7 @@ func (self Socks5Server) serve_read_request(conn net.Conn) (network, addr string
 
 		host = string(domain)
 
-	case 0x04:	//IPv6
+	case 0x04:    //IPv6
 		network = "tcp6"
 
 		ip := make(net.IP, 16)
@@ -237,9 +237,9 @@ func (self Socks5Server) serve_write_reply(conn net.Conn, addr net.Addr, e error
 		atyp = 0x03        //domain
 	} else {
 		if ip = ip.To4(); ip != nil {
-			atyp = 0x01		//IPv4
+			atyp = 0x01        //IPv4
 		} else if ip = ip.To16(); ip != nil {
-			atyp = 0x04		//IPv6
+			atyp = 0x04        //IPv6
 		} else {
 			err = errors.New("local address error")
 			return
@@ -293,7 +293,7 @@ func (self Socks5Server) serve_setup(conn net.Conn) (proxy net.Conn, err error) 
 		if proxy, err = self.Dialer.Dial(network, addr); err != nil {
 			err = Error{SOCKS5_REP_CONNECTION_REFUSED, err.Error()}
 		}
-		defer func () {
+		defer func() {
 			if err != nil && proxy != nil {
 				proxy.Close()
 				proxy = nil
@@ -321,12 +321,12 @@ func (self Socks5Server) serve_loop(conn, proxy net.Conn) (err error) {
 
 	go self.serve_copy_loop(proxy, conn, ch)
 
-	err = <- ch
+	err = <-ch
 
 	conn.SetReadDeadline(time.Now())
 	proxy.SetReadDeadline(time.Now())
 
-	<- ch	//Waiting for another exit
+	<-ch    //Waiting for another exit
 	return
 }
 

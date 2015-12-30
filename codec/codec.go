@@ -8,8 +8,8 @@ import (
 )
 
 type Codec interface {
-	Encode(dst,src []byte) ([]byte, error)
-	Decode(dst,src []byte) ([]byte, error)
+	Encode(dst, src []byte) ([]byte, error)
+	Decode(dst, src []byte) ([]byte, error)
 }
 
 var codecs map[string]Codec = make(map[string]Codec)
@@ -31,7 +31,7 @@ type CodecChan struct {
 	codecs []Codec
 }
 
-func (c *CodecChan) Encode(dst,src []byte) ([]byte, error) {
+func (c *CodecChan) Encode(dst, src []byte) ([]byte, error) {
 	data := src
 	var err error
 	for _, codec := range c.codecs {
@@ -43,10 +43,10 @@ func (c *CodecChan) Encode(dst,src []byte) ([]byte, error) {
 	return data, nil
 }
 
-func (c *CodecChan) Decode(dst,src []byte) ([]byte, error) {
+func (c *CodecChan) Decode(dst, src []byte) ([]byte, error) {
 	data := src
 	var err error
-	for i := len(c.codecs)-1; i>=0; i-- {
+	for i := len(c.codecs) - 1; i >= 0; i-- {
 		codec := c.codecs[i]
 		data, err = codec.Decode(nil, data)
 		if err != nil {
@@ -59,7 +59,7 @@ func (c *CodecChan) Decode(dst,src []byte) ([]byte, error) {
 func NewCodecChan(names []string) (*CodecChan, error) {
 	codecChan := &CodecChan{}
 	for _, name := range names {
-		codec , err := New(name)
+		codec, err := New(name)
 		if err != nil {
 			return nil, err
 		}

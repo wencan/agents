@@ -3,6 +3,7 @@ package agents
 import (
 	"./agent"
 	"google.golang.org/grpc"
+	"golang.org/x/net/context"
 	"sync"
 	"bytes"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"net"
 )
 
+
 type agentStream interface {
 	Send(*agent.DataPacket) error
 	Recv() (*agent.DataPacket, error)
@@ -18,7 +20,7 @@ type agentStream interface {
 
 type unAck struct {
 	no uint32
-	t	time.Time
+	t  time.Time
 }
 
 func newUnAck(no uint32) *unAck {
@@ -28,33 +30,36 @@ func newUnAck(no uint32) *unAck {
 	}
 }
 
-// reference: https://golang.org/src/io/self.go
+// reference: https://golang.org/src/io/pipe.go
 type StreamPipe struct {
-	raw       agentStream
+	ctx        context.Context
 
-	waitGroup sync.WaitGroup
+	raw        agentStream
 
-	rLocker   sync.Mutex
-	rWait     sync.Cond
-	rBuffer   bytes.Buffer
+	waitGroup  sync.WaitGroup
 
-	wLocker   sync.Mutex
-	wWait     sync.Cond
-	wBuffer   bytes.Buffer
+	rLocker    sync.Mutex
+	rWait      sync.Cond
+	rBuffer    bytes.Buffer
 
-	acks      chan uint32
+	wLocker    sync.Mutex
+	wWait      sync.Cond
+	wBuffer    bytes.Buffer
 
-	locker    sync.Locker
-	err       error
-	unacks    []*unAck
+	acks       chan uint32
 
-	ackChecker	*time.Ticker
+	locker     sync.Locker
+	err        error
+	unacks     []*unAck
 
-	serial    uint32
+	ackChecker *time.Ticker
+
+	serial     uint32
 }
 
-func NewStreamPipe(stream agentStream) *StreamPipe {
+func NewStreamPipe(ctx context.Context, stream agentStream) *StreamPipe {
 	pipe := &StreamPipe{
+		ctx: ctx,
 		raw: stream,
 		ackChecker: time.NewTicker(defaultAckCheckDelay),
 	}
@@ -65,132 +70,132 @@ func NewStreamPipe(stream agentStream) *StreamPipe {
 	pipe.waitGroup.Add(3)
 	go pipe.read_loop()
 	go pipe.write_loop()
-	go pipe.ack_check_loop()
+	go pipe.loop()
 
 	return pipe
 }
 
-func (self *StreamPipe) incrSerial() uint32 {
-	self.serial++
-	self.serial = self.serial & ^uint32(0)
-	return self.serial
+func (pipe *StreamPipe) incrSerial() uint32 {
+	pipe.serial++
+	pipe.serial = pipe.serial & ^uint32(0)
+	return pipe.serial
 }
 
-func (self *StreamPipe) newPacket() *agent.DataPacket {
+func (pipe *StreamPipe) newPacket() *agent.DataPacket {
 	return &agent.DataPacket{
-		No: self.incrSerial(),
+		No: pipe.incrSerial(),
 	}
 }
 
-func (self *StreamPipe) read_once() (err error) {
-	packet , err := self.raw.Recv()
+func (pipe *StreamPipe) read_once() (err error) {
+	packet, err := pipe.raw.Recv()
 	if err != nil {
 		return err
 	}
 
-	self.rLocker.Lock()
-	defer self.rLocker.Unlock()
+	pipe.rLocker.Lock()
+	defer pipe.rLocker.Unlock()
 
-	_, err = self.rBuffer.Write(packet.Buff)
+	_, err = pipe.rBuffer.Write(packet.Buff)
 	if err != nil {
 		return err
 	}
 
 	for _, ack := range packet.Acks {
-		no, ok := self.pop_unack()
-		if !ok || ack!=no {
+		no, ok := pipe.pop_unack()
+		if !ok || ack != no {
 			return errors.New("ack invaild")
 		}
 	}
 
-	self.acks <- packet.No
+	pipe.acks <- packet.No
 
-	self.rWait.Signal()
-	self.wWait.Signal()
+	pipe.rWait.Signal()
+	pipe.wWait.Signal()
 
 	return nil
 }
 
-func (self *StreamPipe) read_loop() {
-	defer self.waitGroup.Done()
+func (pipe *StreamPipe) read_loop() {
+	defer pipe.waitGroup.Done()
 
 	for {
-		if err := self.read_once(); err != nil {
-			self.setErr(err)
+		if err := pipe.read_once(); err != nil {
+			pipe.setErr(err)
 			return
 		}
 	}
 }
 
-func (self *StreamPipe) write_loop() {
-	defer self.waitGroup.Done()
+func (pipe *StreamPipe) write_loop() {
+	defer pipe.waitGroup.Done()
 
-	self.wLocker.Lock()
-	defer self.wLocker.Unlock()
+	pipe.wLocker.Lock()
+	defer pipe.wLocker.Unlock()
 
 	for {
-		if self.getErr() != nil {
+		if pipe.getErr() != nil {
 			return
 		}
 
-		if self.wBuffer.Len() == 0 && len(self.acks) == 0 {
-			self.wWait.Wait()
+		if pipe.wBuffer.Len() == 0 && len(pipe.acks) == 0 {
+			pipe.wWait.Wait()
 			continue
 		}
 
-		buff := make([]byte, self.wBuffer.Len())
-		_, err := self.wBuffer.Read(buff)
+		buff := make([]byte, pipe.wBuffer.Len())
+		_, err := pipe.wBuffer.Read(buff)
 		if err != nil {
-			self.setErr(err)
+			pipe.setErr(err)
 			return
 		}
 
-		packet := self.newPacket()
+		packet := pipe.newPacket()
 		packet.Buff = buff
 
 		for {
-			if len(self.acks) == 0 {
+			if len(pipe.acks) == 0 {
 				break
 			}
-			packet.Acks = append(packet.Acks, <- self.acks)
+			packet.Acks = append(packet.Acks, <-pipe.acks)
 		}
 
-		err = self.raw.Send(packet)
+		err = pipe.raw.Send(packet)
 		if err != nil {
-			self.setErr(err)
+			pipe.setErr(err)
 			return
 		}
-		self.push_unack(packet.No)
+		pipe.push_unack(packet.No)
 	}
 }
 
-func (self *StreamPipe) push_unack(no uint32) {
-	self.locker.Lock()
-	defer self.locker.Unlock()
+func (pipe *StreamPipe) push_unack(no uint32) {
+	pipe.locker.Lock()
+	defer pipe.locker.Unlock()
 
-	self.unacks = append(self.unacks, newUnAck(no))
+	pipe.unacks = append(pipe.unacks, newUnAck(no))
 }
 
-func (self *StreamPipe) pop_unack() (no uint32, ok bool) {
-	self.locker.Lock()
-	defer self.locker.Unlock()
+func (pipe *StreamPipe) pop_unack() (no uint32, ok bool) {
+	pipe.locker.Lock()
+	defer pipe.locker.Unlock()
 
-	if len(self.unacks) == 0 {
+	if len(pipe.unacks) == 0 {
 		return 0, false
 	}
 
-	unack := self.unacks[0]
-	self.unacks = self.unacks[1:]
+	unack := pipe.unacks[0]
+	pipe.unacks = pipe.unacks[1:]
 	return unack.no, true
 }
 
-func (self *StreamPipe) ack_check() error {
-	self.locker.Lock()
-	defer self.locker.Unlock()
+func (pipe *StreamPipe) ack_check() error {
+	pipe.locker.Lock()
+	defer pipe.locker.Unlock()
 
 	now := time.Now()
 
-	for _, unack := range self.unacks {
+	for _, unack := range pipe.unacks {
 		if now.Sub(unack.t) > defaultAckMaxDelay {
 			return errors.New("ack timeout")
 		}
@@ -198,88 +203,94 @@ func (self *StreamPipe) ack_check() error {
 	return nil
 }
 
-func (self *StreamPipe) ack_check_loop() {
-	defer self.waitGroup.Done()
-
-	for _ = range self.ackChecker.C {
-		if err := self.ack_check(); err != nil {
-			self.setErr(err)
-			return
-		}
-	}
-}
-
-func (self *StreamPipe) getErr() error {
-	self.locker.Lock()
-	defer self.locker.Unlock()
-
-	return self.err
-}
-
-func (self*StreamPipe) setErr(err error) {
-	self.locker.Lock()
-	defer self.locker.Unlock()
-
-	if self.err == nil {
-		self.err = err
-	}
-}
-
-func (self *StreamPipe) Read(buff []byte) (n int, err error) {
-	self.rLocker.Lock()
-	defer self.rLocker.Unlock()
+func (pipe *StreamPipe) loop() {
+	defer pipe.waitGroup.Done()
 
 	for {
-		if err = self.getErr(); err != nil {
+		select {
+		case <-pipe.ackChecker.C:
+			if err := pipe.ack_check(); err != nil {
+				pipe.setErr(err)
+				return
+			}
+		case <-pipe.ctx.Done():
+			pipe.setErr(pipe.ctx.Err())
+			return
+		}
+	}
+}
+
+func (pipe *StreamPipe) getErr() error {
+	pipe.locker.Lock()
+	defer pipe.locker.Unlock()
+
+	return pipe.err
+}
+
+func (pipe*StreamPipe) setErr(err error) {
+	pipe.locker.Lock()
+	defer pipe.locker.Unlock()
+
+	if pipe.err == nil {
+		pipe.err = err
+
+		pipe.rWait.Signal()
+		pipe.wWait.Signal()
+	}
+}
+
+func (pipe *StreamPipe) Read(buff []byte) (n int, err error) {
+	pipe.rLocker.Lock()
+	defer pipe.rLocker.Unlock()
+
+	for {
+		if err = pipe.getErr(); err != nil {
 			return
 		}
 
-		if self.rBuffer.Len() == 0 {
-			self.rWait.Wait()
+		if pipe.rBuffer.Len() == 0 {
+			pipe.rWait.Wait()
 			continue
 		}
 	}
 
-	return self.rBuffer.Read(buff)
+	return pipe.rBuffer.Read(buff)
 }
 
-func (self *StreamPipe) Write(buff []byte) (n int, err error) {
-	self.wLocker.Lock()
-	defer self.wLocker.Unlock()
+func (pipe *StreamPipe) Write(buff []byte) (n int, err error) {
+	pipe.wLocker.Lock()
+	defer pipe.wLocker.Unlock()
 
-	err = self.getErr()
+	err = pipe.getErr()
 	if err != nil {
 		return 0, nil
 	}
 
-	_, err = self.wBuffer.Write(buff)
+	_, err = pipe.wBuffer.Write(buff)
 	if err != nil {
 		return 0, err
 	}
 
-	self.wWait.Signal()
+	pipe.wWait.Signal()
 
 	return
 }
 
-func (self *StreamPipe) CloseWithError(e error) (err error) {
-	self.locker.Lock()
-	defer self.locker.Unlock()
+func (pipe *StreamPipe) CloseWithError(e error) (err error) {
+	pipe.locker.Lock()
+	defer pipe.locker.Unlock()
 
 	if e == nil {
 		e = io.EOF
 	}
-	self.setErr(e)
+	pipe.setErr(e)
 
-	self.rWait.Signal()
-	self.wWait.Signal()
-
-	if s, ok := self.raw.(grpc.ClientStream); ok {
+	if s, ok := pipe.raw.(grpc.ClientStream); ok {
 		err = s.CloseSend()
 	} else {
 		//waiting peer close
 		for {
-			_, err = self.raw.Recv()
+			_, err = pipe.raw.Recv()
 			if err != nil {
 				break
 			}
@@ -289,31 +300,31 @@ func (self *StreamPipe) CloseWithError(e error) (err error) {
 		return err
 	}
 
-	self.waitGroup.Wait()
+	pipe.waitGroup.Wait()
 	return nil
 }
 
-func (self *StreamPipe) Close() (err error) {
-	return self.CloseWithError(nil)
+func (pipe *StreamPipe) Close() (err error) {
+	return pipe.CloseWithError(nil)
 }
 
-func (self *StreamPipe) LocalAddr() net.Addr {
+func (pipe *StreamPipe) LocalAddr() net.Addr {
 	return streamPipeAddr(0)
 }
 
-func (self *StreamPipe) RemoteAddr() net.Addr {
+func (pipe *StreamPipe) RemoteAddr() net.Addr {
 	return streamPipeAddr(0)
 }
 
-func (self *StreamPipe) SetDeadline(t time.Time) error {
+func (pipe *StreamPipe) SetDeadline(t time.Time) error {
 	return errors.New("deadLine not supported")
 }
 
-func (self *StreamPipe) SetReadDeadline(t time.Time) error {
+func (pipe *StreamPipe) SetReadDeadline(t time.Time) error {
 	return errors.New("deadLine not supported")
 }
 
-func (self *StreamPipe) SetWriteDeadline(t time.Time) error {
+func (pipe *StreamPipe) SetWriteDeadline(t time.Time) error {
 	return errors.New("deadLine not supported")
 }
 
@@ -334,15 +345,17 @@ func Io_exchange(pipe *StreamPipe, proxy net.Conn, done chan struct{}) (err erro
 	go io_copy_until_error(proxy, pipe, ch)
 
 	select {
-	case err = <- ch:	//io error
+	case err = <-ch:
+	//io error
 		proxy.Close()
 		pipe.CloseWithError(err)
-		<- ch
-	case <- done:	//session done
+		<-ch
+	case <-done:
+	//session done
 		proxy.Close()
 		pipe.Close()
-		<- ch
-		<- ch
+		<-ch
+		<-ch
 	}
 
 	return err

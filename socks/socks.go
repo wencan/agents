@@ -1,7 +1,7 @@
 package socks
 
 type Error struct {
-	x byte
+	x     byte
 	error string
 }
 
