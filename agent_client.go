@@ -8,8 +8,6 @@ import (
 	"time"
 	"sync"
 	"net"
-	"io"
-	"bytes"
 	"errors"
 )
 
@@ -43,10 +41,10 @@ func NewAgentClient(ctx context.Context) *AgentClient {
 
 func (client *AgentClient) ping() error {
 	ping := &agent.Ping{
-		AppData: time.Now(),
+		AppData: time.Now().String(),
 	}
 
-	md := metadata.New(map[string][]string{
+	md := metadata.New(map[string]string{
 		"session": client.session,
 	})
 	ctx := metadata.NewContext(client.ctx, md)
@@ -85,7 +83,7 @@ func (client *AgentClient) Dial(network, address string) (conn net.Conn, err err
 		},
 	}
 
-	md := metadata.New(map[string][]string{
+	md := metadata.New(map[string]string{
 		"session": client.session,
 	})
 	ctx := metadata.NewContext(client.ctx, md)
@@ -95,19 +93,17 @@ func (client *AgentClient) Dial(network, address string) (conn net.Conn, err err
 		return nil, err
 	}
 
-	md = metadata.New(map[string][]string{
+	md = metadata.New(map[string]string{
 		"session": client.session,
 		"channel": reply.Channel,
 	})
 	ctx = metadata.NewContext(client.ctx, md)
 	var stream agent.Agent_ExchangeClient
 	if stream, err = client.conn.Exchange(ctx); err != nil {
-		return err
+		return nil, err
 	}
-	//...
 
-	client.waitGroup.Add(1)
-	defer client.waitGroup.Done()
+	return NewStreamPipe(stream), nil
 }
 
 func (client *AgentClient) Close() error {

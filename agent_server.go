@@ -10,10 +10,6 @@ import (
 	"time"
 	"sync"
 	"net"
-	"errors"
-	"encoding/binary"
-	"bytes"
-	"io"
 )
 
 const (
@@ -44,7 +40,7 @@ var (
 	gerr_other = grpc.Errorf(codes.Canceled, "other...")
 )
 
-type AuthChecker interface {
+type Guard interface {
 	Type() agent.AuthMethod
 	UsernameAndPassword(username, password string) bool
 }
@@ -55,49 +51,32 @@ type Session struct {
 
 	proxies  map[string]net.Conn
 
-	done     chan error
+	done     chan struct{}
 }
 
 func NewSessionInfo() *Session {
 	return &Session{
 		lastKeep: time.Now(),
 		waitAuth: true,
-		proxies: make([string]net.Conn),
+		proxies: make(map[string]net.Conn),
 		done: make(chan struct{}),
 	}
 }
 
-func (s *Session) Keep() {
-	s.lastKeep = time.Now()
-}
-
-func (s *Session) LastKeep() time.Time {
-	return s.lastKeep
-}
-
-func (s *Session) CloseWithError(e error) error {
-
-}
-
-func (s *Session) Close() error {
-
-}
-
 type AgentServer struct {
-	authChecker    AuthChecker
+	guard      Guard	//auth
 
-	slocker        sync.Locker
-	sessions       map[string]*Session
+	slocker    sync.Mutex
+	sessions   map[string]*Session
 
-	pingTicker     *time.Ticker
+	pingTicker *time.Ticker
 }
 
-func NewAgentServer(checker AuthChecker) *AgentServer {
+func NewAgentServer(guard Guard) *AgentServer {
 	server := &AgentServer{
-		authChecker: checker,
-		slocker: sync.Mutex{},
+		guard: guard,
 		sessions: make(map[string]*Session, 100),
-		pingTicker: &time.NewTicker(defaultPingCheckDelay),
+		pingTicker: time.NewTicker(defaultPingCheckDelay),
 	}
 
 	go server.checkLoop()
@@ -119,9 +98,9 @@ func (self *AgentServer) Hello(ctx context.Context, req *agent.HelloRequest) (re
 		Session: session,
 	}
 
-	if self.authChecker != nil {
+	if self.guard != nil {
 		sInfo.waitAuth = true
-		reply.AuthMethod = self.authChecker.Type()
+		reply.AuthMethod = self.guard.Type()
 	} else {
 		sInfo.waitAuth = false
 		reply.AuthMethod = agent.AuthMethod_NoAuth
@@ -147,12 +126,11 @@ func (self *AgentServer) Auth(ctx context.Context, req *agent.AuthRequest) (repl
 		return nil, gerr_session_loss
 	}
 
-	if self.authChecker != nil {
+	if self.guard != nil {
 		ok := false
 		if up := req.GetUsernameAndPassword(); up != nil {
-			ok = self.authChecker.UsernameAndPassword(up.Username, up.Password)
+			ok = self.guard.UsernameAndPassword(up.Username, up.Password)
 		}
-
 		if !ok {
 			return nil, gerr_unauthenticated
 		}
@@ -205,7 +183,7 @@ func (self *AgentServer) Bind(ctx context.Context, req *agent.BindRequest) (repl
 	sInfo.waitAuth = false
 	self.sessions[session] = sInfo
 
-	reply = agent.BindReply{
+	reply = &agent.BindReply{
 		Session: session,
 	}
 
@@ -284,7 +262,7 @@ func (self *AgentServer) Exchange(stream agent.Agent_ExchangeServer) (err error)
 		return gerr_channel_loss
 	}
 
-	var done chan error
+	var done chan struct{}
 	var proxy net.Conn
 
 	//get proxy connection
@@ -308,6 +286,8 @@ func (self *AgentServer) Exchange(stream agent.Agent_ExchangeServer) (err error)
 
 	pipe := NewStreamPipe(stream)
 
+	//proxy
+	//until error(contain eof)
 	return Io_exchange(pipe, proxy, done)
 }
 
@@ -347,14 +327,15 @@ func (self *AgentServer) check() {
 
 	for session, sInfo := range self.sessions {
 		if now.Sub(sInfo.lastKeep) > defaultPingMaxDelay {
-			sInfo.done <- gerr_heartbeat_timeout
+			//sInfo.done <- gerr_heartbeat_timeout
+			close(sInfo.done)
 			delete(self.sessions, session)
 		}
 	}
 }
 
 func (self *AgentServer) checkLoop() {
-	for _ := range self.pingTicker.C {
+	for _ = range self.pingTicker.C {
 		self.check()
 	}
 }

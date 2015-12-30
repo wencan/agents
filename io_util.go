@@ -6,7 +6,6 @@ import (
 	"sync"
 	"bytes"
 	"io"
-	"cmd/link/internal/ld"
 	"time"
 	"errors"
 	"net"
@@ -17,14 +16,12 @@ type agentStream interface {
 	Recv() (*agent.DataPacket, error)
 }
 
-type serial_number uint32
-
 type unAck struct {
-	no serial_number
+	no uint32
 	t	time.Time
 }
 
-func newUnAck(no serial_number) *unAck {
+func newUnAck(no uint32) *unAck {
 	return &unAck{
 		no: no,
 		t: time.Now(),
@@ -45,7 +42,7 @@ type StreamPipe struct {
 	wWait     sync.Cond
 	wBuffer   bytes.Buffer
 
-	acks      chan serial_number
+	acks      chan uint32
 
 	locker    sync.Locker
 	err       error
@@ -53,7 +50,7 @@ type StreamPipe struct {
 
 	ackChecker	*time.Ticker
 
-	serial    serial_number
+	serial    uint32
 }
 
 func NewStreamPipe(stream agentStream) *StreamPipe {
@@ -62,8 +59,8 @@ func NewStreamPipe(stream agentStream) *StreamPipe {
 		ackChecker: time.NewTicker(defaultAckCheckDelay),
 	}
 
-	pipe.rWait = sync.Cond{L: pipe.rLocker}
-	pipe.rWait = sync.Cond{L: pipe.wLocker}
+	pipe.rWait = sync.Cond{L: &pipe.rLocker}
+	pipe.rWait = sync.Cond{L: &pipe.wLocker}
 
 	pipe.waitGroup.Add(3)
 	go pipe.read_loop()
@@ -73,9 +70,9 @@ func NewStreamPipe(stream agentStream) *StreamPipe {
 	return pipe
 }
 
-func (self *StreamPipe) incrSerial() serial_number {
+func (self *StreamPipe) incrSerial() uint32 {
 	self.serial++
-	self.serial = self.serial & ^serial_number(0)
+	self.serial = self.serial & ^uint32(0)
 	return self.serial
 }
 
@@ -167,14 +164,14 @@ func (self *StreamPipe) write_loop() {
 	}
 }
 
-func (self *StreamPipe) push_unack(no serial_number) {
+func (self *StreamPipe) push_unack(no uint32) {
 	self.locker.Lock()
 	defer self.locker.Unlock()
 
 	self.unacks = append(self.unacks, newUnAck(no))
 }
 
-func (self *StreamPipe) pop_unack() (no serial_number, ok bool) {
+func (self *StreamPipe) pop_unack() (no uint32, ok bool) {
 	self.locker.Lock()
 	defer self.locker.Unlock()
 
@@ -204,7 +201,7 @@ func (self *StreamPipe) ack_check() error {
 func (self *StreamPipe) ack_check_loop() {
 	defer self.waitGroup.Done()
 
-	for _ := range self.ackChecker.C {
+	for _ = range self.ackChecker.C {
 		if err := self.ack_check(); err != nil {
 			self.setErr(err)
 			return
@@ -301,11 +298,11 @@ func (self *StreamPipe) Close() (err error) {
 }
 
 func (self *StreamPipe) LocalAddr() net.Addr {
-	return &streamPipeAddr(0)
+	return streamPipeAddr(0)
 }
 
 func (self *StreamPipe) RemoteAddr() net.Addr {
-	return &streamPipeAddr(0)
+	return streamPipeAddr(0)
 }
 
 func (self *StreamPipe) SetDeadline(t time.Time) error {
@@ -351,7 +348,7 @@ func Io_exchange(pipe *StreamPipe, proxy net.Conn, done chan struct{}) (err erro
 	return err
 }
 
-func io_copy_until_error(a, b io.ReadWriteCloser, ch chan  struct{}) {
+func io_copy_until_error(a, b io.ReadWriteCloser, ch chan error) {
 	_, err := io.Copy(a, b)
 	ch <- err
 }
