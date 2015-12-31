@@ -33,6 +33,7 @@ func newUnAck(no uint32) *unAck {
 // reference: https://golang.org/src/io/pipe.go
 type StreamPipe struct {
 	ctx        context.Context
+	cancelFunc context.CancelFunc
 
 	raw        agentStream
 
@@ -48,7 +49,7 @@ type StreamPipe struct {
 
 	acks       chan uint32
 
-	locker     sync.Locker
+	locker     sync.Mutex
 	err        error
 	unacks     []*unAck
 
@@ -58,14 +59,18 @@ type StreamPipe struct {
 }
 
 func NewStreamPipe(ctx context.Context, stream agentStream) *StreamPipe {
+	var cancelFunc context.CancelFunc
+	ctx, cancelFunc = context.WithCancel(ctx)
 	pipe := &StreamPipe{
 		ctx: ctx,
+		cancelFunc:cancelFunc,
 		raw: stream,
+		acks: make(chan uint32, 10),
 		ackChecker: time.NewTicker(defaultAckCheckDelay),
 	}
 
 	pipe.rWait = sync.Cond{L: &pipe.rLocker}
-	pipe.rWait = sync.Cond{L: &pipe.wLocker}
+	pipe.wWait = sync.Cond{L: &pipe.wLocker}
 
 	pipe.waitGroup.Add(3)
 	go pipe.readLoop()
@@ -252,6 +257,8 @@ func (pipe *StreamPipe) Read(buff []byte) (n int, err error) {
 		if pipe.rBuffer.Len() == 0 {
 			pipe.rWait.Wait()
 			continue
+		} else {
+			break
 		}
 	}
 
@@ -267,7 +274,7 @@ func (pipe *StreamPipe) Write(buff []byte) (n int, err error) {
 		return 0, nil
 	}
 
-	_, err = pipe.wBuffer.Write(buff)
+	n, err = pipe.wBuffer.Write(buff)
 	if err != nil {
 		return 0, err
 	}
@@ -278,15 +285,14 @@ func (pipe *StreamPipe) Write(buff []byte) (n int, err error) {
 }
 
 func (pipe *StreamPipe) CloseWithError(e error) (err error) {
-	pipe.locker.Lock()
-	defer pipe.locker.Unlock()
-
 	if pipe.Err() == nil {
 		if e == nil {
 			e = io.EOF
 		}
 		pipe.setErr(e)
 	}
+
+	pipe.cancelFunc()
 
 	if s, ok := pipe.raw.(grpc.ClientStream); ok {
 		//client actively close the stream

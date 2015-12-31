@@ -4,7 +4,6 @@ import (
 	"../agent"
 	"google.golang.org/grpc/metadata"
 	"golang.org/x/net/context"
-	"log"
 	"time"
 	"sync"
 	"net"
@@ -104,7 +103,6 @@ func (client *AgentClient) loop() {
 			return
 		case <-client.pingTicker.C:
 			if err := client.ping(); err != nil {
-				log.Println(err)
 				client.cancelFunc()
 				return
 			}
@@ -124,7 +122,7 @@ func (client *AgentClient) Dial(network, address string) (conn net.Conn, err err
 		"session": client.session,
 	})
 	ctx := metadata.NewContext(client.ctx, md)
-	ctx, _ = context.WithTimeout(ctx, defaultContextTimeout)
+	//ctx, _ = context.WithTimeout(ctx, defaultContextTimeout)
 	var reply *agent.ConnectReply
 	if reply, err = client.raw.Connect(ctx, req); err != nil {
 		return nil, err

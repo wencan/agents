@@ -7,7 +7,7 @@ import (
 	"io/ioutil"
 )
 
-func TestAgentClient(t *testing.T) {
+func TestClient(t *testing.T) {
 	var opts []grpc.DialOption
 	opts = append(opts, grpc.WithInsecure())
 
@@ -17,13 +17,13 @@ func TestAgentClient(t *testing.T) {
 		return
 	}
 
-	transport := http.Transport{
+	transport := &http.Transport{
 		Dial: dialer.Dial,
 	}
 	httpc := http.Client{Transport: transport}
 
 	var response *http.Response
-	response, err = httpc.Get("www.example.com")
+	response, err = httpc.Get("http://www.example.com")
 	if err != nil {
 		t.Error(err)
 		return
@@ -36,5 +36,5 @@ func TestAgentClient(t *testing.T) {
 		t.Error(err)
 		return
 	}
-	t.Log(buff)
+	t.Log(string(buff))
 }
