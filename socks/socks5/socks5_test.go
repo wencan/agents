@@ -16,8 +16,8 @@ func (self TestDialer) Dial(network, address string) (proxy net.Conn, err error)
 }
 
 func TestSocks5(t *testing.T) {
-	srv := Socks5Server{&TestDialer{}}
+	srv := Server{&TestDialer{}}
 	if err := srv.ListenAndServe("tcp", ":8080"); err != nil {
-		log.Fatalln(err)
+		t.Error(err)
 	}
 }

@@ -64,11 +64,11 @@ func (self Error) Error() string {
 	return self.error
 }
 
-type Socks5Server struct {
+type Server struct {
 	Dialer proxy.Dialer
 }
 
-func (self Socks5Server) ListenAndServe(network, address string) (err error) {
+func (self Server) ListenAndServe(network, address string) (err error) {
 	var listener net.Listener
 	if listener, err = net.Listen(network, address); err != nil {
 		return
@@ -76,7 +76,7 @@ func (self Socks5Server) ListenAndServe(network, address string) (err error) {
 	return self.Serve(listener)
 }
 
-func (self Socks5Server) Serve(listener net.Listener) (err error) {
+func (self Server) Serve(listener net.Listener) (err error) {
 	for {
 		var conn net.Conn
 		if conn, err = listener.Accept(); err != nil {
@@ -88,7 +88,7 @@ func (self Socks5Server) Serve(listener net.Listener) (err error) {
 	return
 }
 
-func (self Socks5Server) serve(conn net.Conn) {
+func (self Server) serve(conn net.Conn) {
 	defer func() {
 		conn.Close()
 
@@ -119,7 +119,7 @@ func (self Socks5Server) serve(conn net.Conn) {
 	}
 }
 
-func (self Socks5Server) initialize(conn net.Conn) (err error) {
+func (self Server) initialize(conn net.Conn) (err error) {
 	//read version, methods field
 	buff := make([]byte, 2)
 	if err = binary.Read(conn, binary.BigEndian, &buff); err != nil {
@@ -150,7 +150,7 @@ func (self Socks5Server) initialize(conn net.Conn) (err error) {
 	return
 }
 
-func (self Socks5Server) readRequest(conn net.Conn) (network, addr string, err error) {
+func (self Server) readRequest(conn net.Conn) (network, addr string, err error) {
 	buff := make([]byte, 4)
 	if err = binary.Read(conn, binary.BigEndian, &buff); err != nil {
 		return
@@ -226,7 +226,7 @@ func (self Socks5Server) readRequest(conn net.Conn) (network, addr string, err e
 	return
 }
 
-func (self Socks5Server) writeReply(conn net.Conn, addr net.Addr, e error) (err error) {
+func (self Server) writeReply(conn net.Conn, addr net.Addr, e error) (err error) {
 	if e != nil {
 		if _e, ok := e.(Error); ok {
 			return binary.Write(conn, binary.BigEndian, _e.Byte())
@@ -296,7 +296,7 @@ func (self Socks5Server) writeReply(conn net.Conn, addr net.Addr, e error) (err 
 	return binary.Write(conn, binary.BigEndian, port)
 }
 
-func (self Socks5Server) setup(conn net.Conn) (proxy net.Conn, err error) {
+func (self Server) setup(conn net.Conn) (proxy net.Conn, err error) {
 	var network, addr string
 
 	//read
@@ -327,7 +327,7 @@ func (self Socks5Server) setup(conn net.Conn) (proxy net.Conn, err error) {
 	return
 }
 
-func (self Socks5Server) serveloop(conn, proxy net.Conn) (err error) {
+func (self Server) serveloop(conn, proxy net.Conn) (err error) {
 	ch := make(chan error, 2)
 
 	go self.copyLoop(conn, proxy, ch)
@@ -343,7 +343,7 @@ func (self Socks5Server) serveloop(conn, proxy net.Conn) (err error) {
 	return
 }
 
-func (self Socks5Server) copyLoop(conn1, conn2 net.Conn, ch chan error) {
+func (self Server) copyLoop(conn1, conn2 net.Conn, ch chan error) {
 	_, err := io.Copy(conn1, conn2)
 	ch <- err
 }

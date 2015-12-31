@@ -1,7 +1,7 @@
-package agents
+package internal
 
 import (
-	"./agent"
+	"../agent"
 	"golang.org/x/net/context"
 	"code.google.com/p/go-uuid/uuid"
 	"google.golang.org/grpc"
@@ -218,11 +218,10 @@ func (srv *AgentServer) Connect(ctx context.Context, req *agent.ConnectRequest) 
 		return nil, err
 	}
 
-	channel := uuid.New()
-
 	srv.slocker.Lock()
 	defer srv.slocker.Unlock()
 
+	channel := uuid.New()
 	if sInfo, ok := srv.sessions[session]; ok {
 		sInfo.proxies[channel] = conn
 	} else {

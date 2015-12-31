@@ -18,12 +18,14 @@ func TestProto(t *testing.T) {
 	data, err := codec.Marshal(ping)
 	if err != nil {
 		t.Error(err)
+		return
 	}
 
 	ping = &agent.Ping{}
 	err = codec.Unmarshal(data, ping)
 	if err != nil {
 		t.Error(err)
+		return
 	}
 
 	t.Log("new uuid:", ping.AppData)

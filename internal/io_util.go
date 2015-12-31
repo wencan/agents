@@ -1,7 +1,7 @@
-package agents
+package internal
 
 import (
-	"./agent"
+	"../agent"
 	"google.golang.org/grpc"
 	"golang.org/x/net/context"
 	"sync"
@@ -134,7 +134,7 @@ func (pipe *StreamPipe) writeLoop() {
 	defer pipe.wLocker.Unlock()
 
 	for {
-		if pipe.getErr() != nil {
+		if pipe.Err() != nil {
 			return
 		}
 
@@ -221,7 +221,7 @@ func (pipe *StreamPipe) loop() {
 	}
 }
 
-func (pipe *StreamPipe) getErr() error {
+func (pipe *StreamPipe) Err() error {
 	pipe.locker.Lock()
 	defer pipe.locker.Unlock()
 
@@ -245,7 +245,7 @@ func (pipe *StreamPipe) Read(buff []byte) (n int, err error) {
 	defer pipe.rLocker.Unlock()
 
 	for {
-		if err = pipe.getErr(); err != nil {
+		if err = pipe.Err(); err != nil {
 			return
 		}
 
@@ -262,7 +262,7 @@ func (pipe *StreamPipe) Write(buff []byte) (n int, err error) {
 	pipe.wLocker.Lock()
 	defer pipe.wLocker.Unlock()
 
-	err = pipe.getErr()
+	err = pipe.Err()
 	if err != nil {
 		return 0, nil
 	}
@@ -281,24 +281,26 @@ func (pipe *StreamPipe) CloseWithError(e error) (err error) {
 	pipe.locker.Lock()
 	defer pipe.locker.Unlock()
 
-	if e == nil {
-		e = io.EOF
+	if pipe.Err() == nil {
+		if e == nil {
+			e = io.EOF
+		}
+		pipe.setErr(e)
 	}
-	pipe.setErr(e)
 
 	if s, ok := pipe.raw.(grpc.ClientStream); ok {
-		err = s.CloseSend()
+		//client actively close the stream
+		if err = s.CloseSend(); err != nil {
+			return err
+		}
 	} else {
-		//waiting peer close
+		// server wait for the peer to close the stream
 		for {
 			_, err = pipe.raw.Recv()
 			if err != nil {
 				break
 			}
 		}
-	}
-	if err != nil {
-		return err
 	}
 
 	pipe.waitGroup.Wait()
@@ -339,22 +341,30 @@ func (streamPipeAddr) String() string {
 	return "StreamPipe"
 }
 
-func IoExchange(pipe *StreamPipe, proxy net.Conn, done chan struct{}) (err error) {
+func IoExchange(a, b io.ReadWriteCloser, done chan struct{}) (err error) {
 	ch := make(chan error, 2)
 
-	go ioCopyUntilError(pipe, proxy, ch)
-	go ioCopyUntilError(proxy, pipe, ch)
+	go ioCopyUntilError(a, b, ch)
+	go ioCopyUntilError(b, a, ch)
 
 	select {
 	case err = <-ch:
 	//io error
-		proxy.Close()
-		pipe.CloseWithError(err)
+		if pipe, ok := a.(*StreamPipe); ok {
+			pipe.CloseWithError(err)
+		} else {
+			a.Close()
+		}
+		if pipe, ok := b.(*StreamPipe); ok {
+			pipe.CloseWithError(err)
+		} else {
+			b.Close()
+		}
 		<-ch
 	case <-done:
 	//session done
-		proxy.Close()
-		pipe.Close()
+		a.Close()
+		b.Close()
 		<-ch
 		<-ch
 	}

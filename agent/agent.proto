@@ -19,8 +19,6 @@ message HelloReply {
     string session = 3; //if no auth
 
     AuthMethod authMethod = 4;
-
-    repeated string codecs = 5;
 }
 
 //metadata: session
