@@ -135,6 +135,7 @@ func (client *AgentClient) ping() error {
 	} else if ping.AppData != pong.AppData {
 		return errors.New("pong appData exception")
 	}
+
 	return nil
 }
 

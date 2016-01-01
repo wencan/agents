@@ -4,6 +4,9 @@ import (
 	"../codec"
 	"testing"
 	"google.golang.org/grpc"
+	"net"
+	"io"
+	"log"
 )
 
 func TestServer(t *testing.T) {
@@ -27,5 +30,28 @@ func TestServer(t *testing.T) {
 	if err != nil {
 		t.Error(err)
 		return
+	}
+}
+
+func TestEcho(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:8888")
+	if err != nil {
+		t.Error(err)
+		return
+	}
+
+	for {
+		conn, err := listener.Accept()
+		if err != nil {
+			t.Error(err)
+		}
+
+		log.Println("New connection form:", conn.RemoteAddr().String())
+		go func() {
+			_, err := io.Copy(conn, conn)
+			if err != nil {
+				log.Println(err)
+			}
+		}()
 	}
 }

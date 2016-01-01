@@ -18,7 +18,7 @@ const (
 	versionMajor uint32 = 1;
 	versionMinor uint32 = 0;
 
-	defaultContextTimeout time.Duration = 10 * time.Second
+	defaultContextTimeout time.Duration = 60 * time.Second
 
 	defaultPingDelay time.Duration = 60 * time.Second
 	defaultPingMaxDelay time.Duration = 120 * time.Second
@@ -148,6 +148,8 @@ func (srv *AgentServer) Auth(ctx context.Context, req *agent.AuthRequest) (reply
 	reply = &agent.AuthReply{
 		Session: session,
 	}
+
+	log.Println("New session:", session)
 
 	return reply, nil
 }
@@ -335,6 +337,8 @@ func (srv *AgentServer) Bye(ctx context.Context, req *agent.Empty) (reply *agent
 	} else {
 		close(sInfo.done)
 		delete(srv.sessions, session)
+
+		log.Println("Byte:", session)
 	}
 
 	return &agent.Empty{}, err
@@ -350,6 +354,8 @@ func (srv *AgentServer) checkAndRemove() {
 		if now.Sub(sInfo.lastKeep) > defaultPingMaxDelay {
 			close(sInfo.done)
 			delete(srv.sessions, session)
+
+			log.Println("Delete invaild session:", session)
 		}
 	}
 }

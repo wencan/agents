@@ -1,6 +1,9 @@
 package internal
 
-import "io"
+import (
+	"io"
+	"log"
+)
 
 func IoExchange(a, b io.ReadWriteCloser, done chan struct{}) (err error) {
 	ch := make(chan error, 2)
@@ -9,8 +12,7 @@ func IoExchange(a, b io.ReadWriteCloser, done chan struct{}) (err error) {
 	go ioCopyUntilError(b, a, ch)
 
 	select {
-	case err = <-ch:
-	//io error
+	case err = <-ch:		//io error
 		if pipe, ok := a.(*StreamPipe); ok {
 			pipe.CloseWithError(err)
 		} else {
@@ -21,9 +23,13 @@ func IoExchange(a, b io.ReadWriteCloser, done chan struct{}) (err error) {
 		} else {
 			b.Close()
 		}
+
 		<-ch
-	case <-done:
-	//session done
+
+		if err != nil {
+			log.Println(err)
+		}
+	case <-done:			//session done
 		a.Close()
 		b.Close()
 		<-ch
