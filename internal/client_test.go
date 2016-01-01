@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"../codec"
 	"testing"
 	"google.golang.org/grpc"
 	"net/http"
@@ -10,6 +11,19 @@ import (
 func TestClient(t *testing.T) {
 	var opts []grpc.DialOption
 	opts = append(opts, grpc.WithInsecure())
+
+	//enable snappy compress
+	if c, err := codec.New("snappy"); err != nil {
+		t.Error(err)
+		return
+	} else {
+		if cc, err := codec.WithProto(c); err != nil {
+			t.Error(err)
+			return
+		} else {
+			opts = append(opts, grpc.WithCodec(cc))
+		}
+	}
 
 	client, err := Dial("127.0.0.1:8080", nil, opts...)
 	if err != nil {
