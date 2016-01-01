@@ -4,14 +4,17 @@ import (
 	"../agent"
 	"google.golang.org/grpc/metadata"
 	"golang.org/x/net/context"
+	"google.golang.org/grpc"
 	"time"
 	"sync"
 	"net"
 	"errors"
-	"google.golang.org/grpc"
 )
 
 type AgentClient struct {
+	target     string
+	opts       []grpc.DialOption
+
 	ctx        context.Context
 	cancelFunc context.CancelFunc
 
@@ -24,7 +27,7 @@ type AgentClient struct {
 	pingTicker *time.Ticker
 }
 
-func Dial(target string, opts ...grpc.DialOption) (client *AgentClient, err error) {
+func Dial(target string, pass Passport, opts ...grpc.DialOption) (client *AgentClient, err error) {
 	conn, err := grpc.Dial(target, opts...)
 	if err != nil {
 		return nil, err
@@ -34,6 +37,8 @@ func Dial(target string, opts ...grpc.DialOption) (client *AgentClient, err erro
 
 	ctx, cancelFunc := context.WithCancel(context.Background())
 	client = &AgentClient{
+		target: target,
+		opts: append([]grpc.DialOption{}, opts...),
 		ctx: ctx,
 		cancelFunc: cancelFunc,
 		raw: cc,
@@ -42,48 +47,87 @@ func Dial(target string, opts ...grpc.DialOption) (client *AgentClient, err erro
 	defer func() {
 		if err != nil {
 			client.Close()
+			client = nil
 		}
 	}()
 
-	if err = client.login(); err != nil {
-		return nil, err
+	if err = client.login(pass); err != nil {
+		return
 	}
 
 	client.waitGroup.Add(1)
 	go client.loop()
 
-	return client, nil
+	return
 }
 
-func (client *AgentClient) login() (err error) {
-	helloReq := &agent.HelloRequest{
+func (client *AgentClient) login(pass Passport) (err error) {
+	req := &agent.HelloRequest{
 		Major:versionMajor,
 		Minor:versionMinor,
 	}
 
-	var helloReply *agent.HelloReply
-	helloReply, err = client.raw.Hello(client.ctx, helloReq)
+	var reply *agent.HelloReply
+	reply, err = client.raw.Hello(client.ctx, req)
 	if err != nil {
 		return err
 	}
 
-	if helloReply.AuthMethod != agent.AuthMethod_NoAuth {
-		return errors.New("no username and password")
+	if reply.AuthMethod == agent.AuthMethod_NoAuth {
+		client.session = reply.Session
+	} else {
+		if pass == nil {
+			return errors.New("need authenticate")
+		}
+		if reply.AuthMethod != pass.Type() {
+			return errors.New("passport type unrecognized")
+		}
+
+		var authReq *agent.AuthRequest
+		authReq, err = pass.ToProto()
+		if err != nil {
+			return
+		}
+
+		var authReply *agent.AuthReply
+		authReply, err = client.raw.Auth(client.ctx, authReq)
+		if err != nil {
+			return
+		}
+
+		client.session = authReply.Session
 	}
 
-	client.session = helloReply.Session
+	return nil
+}
+
+func (client *AgentClient) bind(session string) (err error) {
+	md := metadata.New(map[string]string{
+		"session": session,
+	})
+	ctx := metadata.NewContext(client.ctx, md)
+
+	req := &agent.BindRequest{}
+
+	var reply *agent.BindReply
+	reply, err = client.raw.Bind(ctx, req)
+	if err != nil {
+		return err
+	}
+
+	client.session = reply.Session
 	return nil
 }
 
 func (client *AgentClient) ping() error {
-	ping := &agent.Ping{
-		AppData: time.Now().String(),
-	}
-
 	md := metadata.New(map[string]string{
 		"session": client.session,
 	})
 	ctx := metadata.NewContext(client.ctx, md)
+
+	ping := &agent.Ping{
+		AppData: time.Now().String(),
+	}
 
 	ctx, _ = context.WithTimeout(ctx, defaultContextTimeout)
 	if pong, err := client.raw.Heartbeat(ctx, ping); err != nil {
@@ -110,7 +154,46 @@ func (client *AgentClient) loop() {
 	}
 }
 
+func (client *AgentClient) Divide() (newClient *AgentClient, err error) {
+	conn, err := grpc.Dial(client.target, client.opts...)
+	if err != nil {
+		return nil, err
+	}
+
+	cc := agent.NewAgentClient(conn)
+
+	ctx, cancelFunc := context.WithCancel(context.Background())
+	newClient = &AgentClient{
+		target: client.target,
+		opts: append([]grpc.DialOption{}, client.opts...),
+		ctx: ctx,
+		cancelFunc: cancelFunc,
+		raw: cc,
+		pingTicker: time.NewTicker(defaultPingDelay),
+	}
+	defer func() {
+		if err != nil {
+			newClient.Close()
+			newClient = nil
+		}
+	}()
+
+	if err = newClient.bind(client.session); err != nil {
+		return
+	}
+
+	newClient.waitGroup.Add(1)
+	go newClient.loop()
+
+	return newClient, nil
+}
+
 func (client *AgentClient) Dial(network, address string) (conn net.Conn, err error) {
+	md := metadata.New(map[string]string{
+		"session": client.session,
+	})
+	ctx := metadata.NewContext(client.ctx, md)
+
 	req := &agent.ConnectRequest{
 		Remote: &agent.Address{
 			Network: network,
@@ -118,11 +201,6 @@ func (client *AgentClient) Dial(network, address string) (conn net.Conn, err err
 		},
 	}
 
-	md := metadata.New(map[string]string{
-		"session": client.session,
-	})
-	ctx := metadata.NewContext(client.ctx, md)
-	//ctx, _ = context.WithTimeout(ctx, defaultContextTimeout)
 	var reply *agent.ConnectReply
 	if reply, err = client.raw.Connect(ctx, req); err != nil {
 		return nil, err

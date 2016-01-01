@@ -16,12 +16,11 @@ message HelloReply {
     uint32 major = 1;
     uint32 minor = 2;
 
-    string session = 3; //if no auth
+    string session = 3; //if no need auth
 
     AuthMethod authMethod = 4;
 }
 
-//metadata: session
 message AuthRequest {
     oneof one {
         UsernameAndPassword usernameAndPassword = 1;
