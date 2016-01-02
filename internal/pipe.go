@@ -46,16 +46,16 @@ type StreamPipe struct {
 
 	waitGroup  sync.WaitGroup
 
-	inPackets chan *agent.DataPacket
+	inPackets  chan *agent.DataPacket
 	outPackets chan *agent.DataPacket
-	reads	chan []byte
-	writes	chan []byte
+	reads      chan []byte
+	writes     chan []byte
 
-	acks	[]uint32
-	unAcks	[]*unAck
+	acks       []uint32
+	unAcks     []*unAck
 
-	wBuffer bytes.Buffer
-	rBuffer bytes.Buffer
+	wBuffer    bytes.Buffer
+	rBuffer    bytes.Buffer
 
 	locker     sync.Mutex
 	err        error
@@ -119,13 +119,13 @@ func (pipe *StreamPipe) writeLoop() {
 
 	for {
 		select {
-		case packet := <- pipe.outPackets:
+		case packet := <-pipe.outPackets:
 			err := pipe.raw.Send(packet)
 			if err != nil {
 				pipe.setErr(err)
 				return
 			}
-		case <- pipe.ctx.Done():
+		case <-pipe.ctx.Done():
 			return
 		}
 	}
@@ -164,7 +164,7 @@ func (pipe *StreamPipe) preparePacket(first []byte) (packet *agent.DataPacket, e
 			break
 		}
 
-		buff := <- pipe.writes
+		buff := <-pipe.writes
 		len := intMin(len(buff), cap)
 		packet.Buff = append(packet.Buff, buff[:len]...)
 		cap -= len
@@ -245,13 +245,13 @@ func (pipe *StreamPipe) loop() {
 
 	for {
 		select {
-		case packet := <- pipe.inPackets:
+		case packet := <-pipe.inPackets:
 			err := pipe.handleInPacket(packet)
 			if err != nil {
 				pipe.setErr(err)
 				return
 			}
-		case buff := <- pipe.writes:
+		case buff := <-pipe.writes:
 			err := pipe.handleWrite(buff)
 			if err != nil {
 				pipe.setErr(err)
@@ -298,8 +298,8 @@ func (pipe *StreamPipe) Read(buff []byte) (n int, err error) {
 			if len(pipe.reads) > 0 || n == 0 {
 				var bs []byte
 				select {
-				case bs = <- pipe.reads:
-				case <- pipe.ctx.Done():
+				case bs = <-pipe.reads:
+				case <-pipe.ctx.Done():
 					return n, pipe.Err()
 				}
 

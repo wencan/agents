@@ -1,42 +1,39 @@
-package internal
+package main
 
 import (
-	"../codec"
-	"testing"
+	"../../../codec"
+	"../../../internal"
 	"google.golang.org/grpc"
 	"net/http"
 	"io/ioutil"
+	"log"
 )
 
-func TestClient(t *testing.T) {
+func main() {
 	var opts []grpc.DialOption
 	opts = append(opts, grpc.WithInsecure())
 
 	//enable snappy compress
 	if c, err := codec.New("snappy"); err != nil {
-		t.Error(err)
-		return
+		log.Fatalln(err)
 	} else {
 		if cc, err := codec.WithProto(c); err != nil {
-			t.Error(err)
-			return
+			log.Fatalln(err)
 		} else {
 			opts = append(opts, grpc.WithCodec(cc))
 		}
 	}
 
-	client, err := Dial("127.0.0.1:8080", nil, opts...)
+	client, err := internal.Dial("127.0.0.1:8080", nil, opts...)
 	if err != nil {
-		t.Error(err)
-		return
+		log.Fatalln(err)
 	}
 	defer client.Close()
 
 	//test Divide
 	client, err = client.Divide()
 	if err != nil {
-		t.Error(err)
-		return
+		log.Fatalln(err)
 	}
 	defer client.Close()
 
@@ -48,31 +45,44 @@ func TestClient(t *testing.T) {
 	var response *http.Response
 	response, err = httpc.Get("http://www.example.com")
 	if err != nil {
-		t.Error(err)
-		return
+		log.Fatalln(err)
 	}
 	defer response.Body.Close()
 
 	var buff []byte
 	buff, err = ioutil.ReadAll(response.Body)
 	if err != nil {
-		t.Error(err)
-		return
+		log.Fatalln(err)
 	}
-	t.Log(string(buff))
+	log.Println(string(buff))
 
+	websites := []string{
+		"http://www.example.com",
+		"http://api.ipify.org",
+	}
 
-	response, err = httpc.Get("http://api.ipify.org")
+	for _, website := range websites {
+		buff, err := get(&httpc, website)
+		if err != nil {
+			log.Fatalln(err)
+		}
+
+		log.Println(string(buff))
+	}
+}
+
+func get(httpc *http.Client, url string) (buff []byte, err error) {
+	var response *http.Response
+	response, err = httpc.Get(url)
 	if err != nil {
-		t.Error(err)
-		return
+		return nil, err
 	}
 	defer response.Body.Close()
 
 	buff, err = ioutil.ReadAll(response.Body)
 	if err != nil {
-		t.Error(err)
-		return
+		return nil, err
 	}
-	t.Log(string(buff))
+
+	return buff, err
 }
