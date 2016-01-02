@@ -10,9 +10,15 @@ import (
 	"time"
 	"errors"
 	"net"
-	"reflect"
 )
 
+func intMin(x, y int) int {
+	if x < y {
+		return x
+	} else {
+		return y
+	}
+}
 
 type agentStream interface {
 	Send(*agent.DataPacket) error
@@ -31,9 +37,7 @@ func newUnAck(no uint32) *unAck {
 	}
 }
 
-//reference: https://golang.org/src/io/pipe.go
 //wrap grpc stream as net.Conn
-//very inefficient
 type StreamPipe struct {
 	ctx        context.Context
 	cancelFunc context.CancelFunc
@@ -42,18 +46,19 @@ type StreamPipe struct {
 
 	waitGroup  sync.WaitGroup
 
-	rLocker    sync.Mutex
-	rWait      sync.Cond
-	rBuffer    bytes.Buffer
+	inPackets chan *agent.DataPacket
+	outPackets chan *agent.DataPacket
+	reads	chan []byte
+	writes	chan []byte
 
-	wLocker    sync.Mutex
-	wWait      sync.Cond
-	wBuffer    bytes.Buffer
-	acks       []uint32
+	acks	[]uint32
+	unAcks	[]*unAck
+
+	wBuffer bytes.Buffer
+	rBuffer bytes.Buffer
 
 	locker     sync.Mutex
 	err        error
-	unacks     []*unAck
 
 	ackChecker *time.Ticker
 
@@ -67,11 +72,12 @@ func NewStreamPipe(ctx context.Context, stream agentStream) *StreamPipe {
 		ctx: ctx,
 		cancelFunc:cancelFunc,
 		raw: stream,
+		inPackets: make(chan *agent.DataPacket, 10),
+		outPackets: make(chan *agent.DataPacket, 10),
+		reads: make(chan []byte, 10),
+		writes: make(chan []byte, 10),
 		ackChecker: time.NewTicker(defaultAckCheckDelay),
 	}
-
-	pipe.rWait = sync.Cond{L: &pipe.rLocker}
-	pipe.wWait = sync.Cond{L: &pipe.wLocker}
 
 	pipe.waitGroup.Add(3)
 	go pipe.readLoop()
@@ -93,80 +99,18 @@ func (pipe *StreamPipe) newPacket() *agent.DataPacket {
 	}
 }
 
-func (pipe *StreamPipe) readOnce() (err error) {
-	packet, err := pipe.raw.Recv()
-	if err != nil {
-		return err
-	}
-
-	pipe.rLocker.Lock()
-	defer pipe.rLocker.Unlock()
-
-	_, err = pipe.rBuffer.Write(packet.Buff)
-	if err != nil {
-		return err
-	}
-	pipe.rWait.Signal()
-
-	if len(packet.Buff) > 0 {
-		pipe.wLocker.Lock()
-		pipe.acks  = append(pipe.acks, packet.No)
-		pipe.wLocker.Unlock()
-		pipe.wWait.Signal()
-	}
-
-	if len(packet.Acks) > 0 {
-		acksNo, ok := pipe.popUnacks(len(packet.Acks))
-		if ok {
-			ok = reflect.DeepEqual(packet.Acks, acksNo)
-		}
-		if !ok {
-			return errors.New("ack error")
-		}
-	}
-
-	return nil
-}
 
 func (pipe *StreamPipe) readLoop() {
 	defer pipe.waitGroup.Done()
 
 	for {
-		if err := pipe.readOnce(); err != nil {
+		packet, err := pipe.raw.Recv()
+		if err != nil {
 			pipe.setErr(err)
 			return
 		}
-	}
-}
 
-func (pipe *StreamPipe) waitWrite() (packet *agent.DataPacket, err error) {
-	pipe.wLocker.Lock()
-	defer pipe.wLocker.Unlock()
-
-	for {
-		err = pipe.Err()
-		if err != nil {
-			return nil, err
-		}
-
-		if pipe.wBuffer.Len() == 0 && len(pipe.acks) == 0 {
-			pipe.wWait.Wait()
-			continue
-		}
-
-		buff := make([]byte, pipe.wBuffer.Len())
-		_, err = pipe.wBuffer.Read(buff)
-		if err != nil {
-			return nil, err
-		}
-
-		packet := pipe.newPacket()
-		packet.Buff = buff
-
-		packet.Acks = pipe.acks
-		pipe.acks = []uint32{}
-
-		return packet, nil
+		pipe.inPackets <- packet
 	}
 }
 
@@ -174,59 +118,122 @@ func (pipe *StreamPipe) writeLoop() {
 	defer pipe.waitGroup.Done()
 
 	for {
-		packet, err := pipe.waitWrite()
-		if err != nil {
-			pipe.setErr(err)
-			return
-		}
-
-		if len(packet.Buff) > 0 {
-			pipe.pushUnack(packet.No)
-		}
-
-		err = pipe.raw.Send(packet)
-		if err != nil {
-			pipe.setErr(err)
+		select {
+		case packet := <- pipe.outPackets:
+			err := pipe.raw.Send(packet)
+			if err != nil {
+				pipe.setErr(err)
+				return
+			}
+		case <- pipe.ctx.Done():
 			return
 		}
 	}
 }
 
-func (pipe *StreamPipe) pushUnack(no uint32) {
-	pipe.locker.Lock()
-	defer pipe.locker.Unlock()
+func (pipe *StreamPipe) preparePacket(first []byte) (packet *agent.DataPacket, err error) {
+	packet = pipe.newPacket()
 
-	pipe.unacks = append(pipe.unacks, newUnAck(no))
+	if first != nil {
+		packet.Buff = first
+	}
+
+	cap := defaultPacketMaxBytes
+	for {
+		if cap == 0 {
+			break
+		}
+
+		if pipe.wBuffer.Len() > 0 {
+			len := intMin(cap, pipe.wBuffer.Len())
+			buff := make([]byte, len)
+
+			nr := 0
+			nr, err = pipe.wBuffer.Read(buff)
+			if err != nil {
+				return nil, err
+			}
+
+			packet.Buff = append(packet.Buff, buff[:nr]...)
+			cap -= nr
+
+			continue
+		}
+
+		if len(pipe.writes) == 0 {
+			break
+		}
+
+		buff := <- pipe.writes
+		len := intMin(len(buff), cap)
+		packet.Buff = append(packet.Buff, buff[:len]...)
+		cap -= len
+
+		pipe.wBuffer = *bytes.NewBuffer(buff[len:])
+	}
+
+	packet.Acks = pipe.acks
+	pipe.acks = []uint32{}
+
+	if len(packet.Buff) > 0 {
+		unack := newUnAck(packet.No)
+		pipe.unAcks = append(pipe.unAcks, unack)
+	}
+
+	return packet, nil
 }
 
-func (pipe *StreamPipe) popUnacks(n int) (acksNo []uint32, ok bool) {
-	pipe.locker.Lock()
-	defer pipe.locker.Unlock()
+func (pipe *StreamPipe) handleInPacket(packet *agent.DataPacket) (err error) {
+	if len(packet.Buff) > 0 {
+		pipe.reads <- packet.Buff
 
-	if len(pipe.unacks) < n {
-		return nil, false
+		//need ack
+		pipe.acks = append(pipe.acks, packet.No)
 	}
 
-	unacks := pipe.unacks[0:n]
-	pipe.unacks = pipe.unacks[n:]
-
-	acksNo = make([]uint32, n)
-	for i, unack := range unacks {
-		acksNo[i] = unack.no
+	//ack sended packet
+	if len(pipe.unAcks) < len(packet.Acks) {
+		return errors.New("ack error")
+	}
+	unacks := pipe.unAcks[:len(packet.Acks)]
+	pipe.unAcks = pipe.unAcks[len(packet.Acks):]
+	for idx, unack := range unacks {
+		if packet.Acks[idx] != unack.no {
+			return errors.New("ack missmatch")
+		}
 	}
 
-	return acksNo, true
+	//send ack
+	if len(pipe.acks) > 0 {
+		packet, err = pipe.preparePacket(nil)
+		if err != nil {
+			return err
+		}
+
+		pipe.outPackets <- packet
+	}
+
+	return nil
+}
+
+func (pipe *StreamPipe) handleWrite(buff []byte) (err error) {
+	var packet *agent.DataPacket
+	packet, err = pipe.preparePacket(buff)
+	if err != nil {
+		return err
+	}
+
+	pipe.outPackets <- packet
+	return nil
 }
 
 func (pipe *StreamPipe) ackCheck() error {
-	pipe.locker.Lock()
-	defer pipe.locker.Unlock()
-
-	if len(pipe.unacks) == 0 {
+	if len(pipe.unAcks) == 0 {
 		return nil
 	}
 
-	if time.Now().Sub(pipe.unacks[0].t) > defaultAckCheckDelay {
+	t := pipe.unAcks[0].t
+	if time.Now().Sub(t) > defaultAckMaxDelay {
 		return errors.New("ack timeout")
 	}
 
@@ -238,8 +245,21 @@ func (pipe *StreamPipe) loop() {
 
 	for {
 		select {
+		case packet := <- pipe.inPackets:
+			err := pipe.handleInPacket(packet)
+			if err != nil {
+				pipe.setErr(err)
+				return
+			}
+		case buff := <- pipe.writes:
+			err := pipe.handleWrite(buff)
+			if err != nil {
+				pipe.setErr(err)
+				return
+			}
 		case <-pipe.ackChecker.C:
-			if err := pipe.ackCheck(); err != nil {
+			err := pipe.ackCheck()
+			if err != nil {
 				pipe.setErr(err)
 				return
 			}
@@ -259,53 +279,68 @@ func (pipe *StreamPipe) Err() error {
 
 func (pipe*StreamPipe) setErr(err error) {
 	pipe.locker.Lock()
-	defer pipe.locker.Unlock()
-
 	if pipe.err == nil {
 		pipe.err = err
-
-		pipe.rWait.Signal()
-		pipe.wWait.Signal()
 	}
+	pipe.locker.Unlock()
+
+	pipe.cancelFunc()
 }
 
 func (pipe *StreamPipe) Read(buff []byte) (n int, err error) {
-	pipe.rLocker.Lock()
-	defer pipe.rLocker.Unlock()
-
 	for {
-		if err = pipe.Err(); err != nil {
-			return
+		err = pipe.Err()
+		if err != nil {
+			return n, err
 		}
 
 		if pipe.rBuffer.Len() == 0 {
-			pipe.rWait.Wait()
-			continue
-		} else {
+			if len(pipe.reads) > 0 || n == 0 {
+				var bs []byte
+				select {
+				case bs = <- pipe.reads:
+				case <- pipe.ctx.Done():
+					return n, pipe.Err()
+				}
+
+				if bs == nil {
+					return n, io.EOF
+				}
+
+				pipe.rBuffer = *bytes.NewBuffer(bs)
+				if err != nil {
+					return n, err
+				}
+			} else {
+				break
+			}
+		}
+
+		var nr int
+		nr, err = pipe.rBuffer.Read(buff)
+		n += nr
+		if err != nil {
+			return n, err
+		}
+
+		if len(buff) == nr {
 			break
 		}
+
+		buff = buff[nr:]
 	}
 
-	return pipe.rBuffer.Read(buff)
+	return n, err
 }
 
 func (pipe *StreamPipe) Write(buff []byte) (n int, err error) {
-	pipe.wLocker.Lock()
-	defer pipe.wLocker.Unlock()
-
 	err = pipe.Err()
 	if err != nil {
-		return 0, err
+		return n, err
 	}
 
-	n, err = pipe.wBuffer.Write(buff)
-	if err != nil {
-		return 0, err
-	}
-
-	pipe.wWait.Signal()
-
-	return
+	pipe.writes <- buff
+	return len(buff), nil
 }
 
 func (pipe *StreamPipe) CloseWithError(e error) (err error) {
