@@ -220,12 +220,16 @@ func (pipe *StreamPipe) preparePacket(first []byte) (packet *agent.DataPacket, e
 
 func (pipe *StreamPipe) handleInPacket(packet *agent.DataPacket) (err error) {
 	if len(packet.Buff) > 0 {
-		//must non-block
-		select {
-		case pipe.reads <- packet.Buff:
-		default:
+		if len(pipe.readCache) > 0 {
 			pipe.readCache = append(pipe.readCache, packet.Buff)
-			break
+		} else {
+			//must non-block
+			select {
+			case pipe.reads <- packet.Buff:
+			default:
+				pipe.readCache = append(pipe.readCache, packet.Buff)
+				break
+			}
 		}
 
 		//need ack
@@ -270,12 +274,16 @@ func (pipe *StreamPipe) handleWrite(buff []byte) (err error) {
 			return
 		}
 
-		//must non-block
-		select {
-		case pipe.outPackets <- packet:
-		default:
+		if len(pipe.outCache) > 0 {
 			pipe.outCache = append(pipe.outCache, packet)
-			break
+		} else {
+			//must non-block
+			select {
+			case pipe.outPackets <- packet:
+			default:
+				pipe.outCache = append(pipe.outCache, packet)
+				break
+			}
 		}
 	}
 	return
