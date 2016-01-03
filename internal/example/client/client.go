@@ -42,20 +42,6 @@ func main() {
 	}
 	httpc := http.Client{Transport: transport}
 
-	var response *http.Response
-	response, err = httpc.Get("http://www.example.com")
-	if err != nil {
-		log.Fatalln(err)
-	}
-	defer response.Body.Close()
-
-	var buff []byte
-	buff, err = ioutil.ReadAll(response.Body)
-	if err != nil {
-		log.Fatalln(err)
-	}
-	log.Println(string(buff))
-
 	websites := []string{
 		"http://www.example.com",
 		"http://api.ipify.org",

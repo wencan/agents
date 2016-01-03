@@ -7,6 +7,8 @@ import (
 	"log"
 	"net"
 	"time"
+	"fmt"
+	"math/rand"
 )
 
 
@@ -58,11 +60,12 @@ func main() {
 	}()
 
 	for {
-		//now := <- time.After(time.Second * 3)
-		now := time.Now()
+		now := <- time.After(time.Millisecond * 200)
+		//now := time.Now()
 
-		log.Println("Write", now.String())
-		_, err := conn.Write([]byte(now.String()))
+		s := fmt.Sprintf("%d: %s", rand.Int31(), now.String())
+		log.Println("Write", s)
+		_, err := conn.Write([]byte(s))
 		if err != nil {
 			log.Fatalln(err)
 		}

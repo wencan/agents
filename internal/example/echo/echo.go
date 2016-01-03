@@ -22,7 +22,7 @@ func main() {
 		go func() {
 			_, err := io.Copy(conn, conn)
 			if err != nil {
-				log.Fatalln(err)
+				log.Println(err)
 			}
 		}()
 	}
