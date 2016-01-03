@@ -50,8 +50,8 @@ type StreamPipe struct {
 	inPackets  chan *agent.DataPacket
 	outPackets chan *agent.DataPacket
 
-	readCache [][]byte
-	outCache []*agent.DataPacket
+	readCache  [][]byte
+	outCache   []*agent.DataPacket
 
 	reads      chan []byte
 	writes     chan []byte
@@ -127,13 +127,13 @@ func (pipe *StreamPipe) writeLoop() {
 	FIRST:
 	for {
 		select {
-		case packet := <- pipe.outPackets:
+		case packet := <-pipe.outPackets:
 			err := pipe.raw.Send(packet)
 			if err != nil {
 				pipe.cancel(err)
 				discard = true
 			}
-		case <- pipe.ctx.Done():
+		case <-pipe.ctx.Done():
 			break FIRST
 		}
 	}
@@ -141,7 +141,7 @@ func (pipe *StreamPipe) writeLoop() {
 	//handle remain packet
 	for {
 		select {
-		case packet := <- pipe.outPackets:
+		case packet := <-pipe.outPackets:
 			if discard {
 				log.Println("discard packet, No:", packet.No)
 				break
@@ -192,7 +192,7 @@ func (pipe *StreamPipe) preparePacket(first []byte) (packet *agent.DataPacket, e
 		}
 
 		select {
-		case buff := <- pipe.writes:
+		case buff := <-pipe.writes:
 			len := intMin(len(buff), cap)
 			packet.Buff = append(packet.Buff, buff[:len]...)
 			cap -= len
@@ -412,13 +412,13 @@ func (pipe *StreamPipe) Read(buff []byte) (n int, err error) {
 
 			//non-block
 			select {
-			case bs := <- pipe.reads:
+			case bs := <-pipe.reads:
 				_, err = pipe.rBuffer.Write(bs)
 				if err != nil {
 					return n, err
 				}
 			default:
-				//not more data
+			//not more data
 				return n, err
 			}
 
@@ -428,12 +428,12 @@ func (pipe *StreamPipe) Read(buff []byte) (n int, err error) {
 
 		//block
 		select {
-		case bs := <- pipe.reads:
+		case bs := <-pipe.reads:
 			_, err = pipe.rBuffer.Write(bs)
 			if err != nil {
 				return n, err
 			}
-		case <- pipe.ctx.Done():
+		case <-pipe.ctx.Done():
 			return n, pipe.Err()
 		}
 	}
@@ -445,7 +445,7 @@ func (pipe *StreamPipe) Read(buff []byte) (n int, err error) {
 func (pipe *StreamPipe) Write(buff []byte) (n int, err error) {
 	//check pipe status
 	select {
-	case <- pipe.ctx.Done():
+	case <-pipe.ctx.Done():
 		return 0, pipe.Err()
 	default:
 	}
@@ -453,7 +453,7 @@ func (pipe *StreamPipe) Write(buff []byte) (n int, err error) {
 	select {
 	case pipe.writes <- buff:
 		return len(buff), nil
-	case <- pipe.ctx.Done():
+	case <-pipe.ctx.Done():
 		return 0, pipe.Err()
 	}
 
