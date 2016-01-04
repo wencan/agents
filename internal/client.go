@@ -217,7 +217,7 @@ func (client *AgentClient) Dial(network, address string) (conn net.Conn, err err
 		return nil, err
 	}
 
-	return NewStreamPipe(client.ctx, stream), nil
+	return NewStreamPipe(ctx, stream), nil
 }
 
 func (client *AgentClient) Close() (err error) {

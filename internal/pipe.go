@@ -10,7 +10,18 @@ import (
 	"time"
 	"errors"
 	"net"
+	"reflect"
 	"log"
+)
+
+const (
+	selectInPackets = iota
+	selectReads
+	selectOutPackets
+	selectWrites
+	selectAckChecker
+	selectContext
+	selectDefault
 )
 
 func intMin(x, y int) int {
@@ -220,17 +231,7 @@ func (pipe *StreamPipe) preparePacket(first []byte) (packet *agent.DataPacket, e
 
 func (pipe *StreamPipe) handleInPacket(packet *agent.DataPacket) (err error) {
 	if len(packet.Buff) > 0 {
-		if len(pipe.readCache) > 0 {
-			pipe.readCache = append(pipe.readCache, packet.Buff)
-		} else {
-			//must non-block
-			select {
-			case pipe.reads <- packet.Buff:
-			default:
-				pipe.readCache = append(pipe.readCache, packet.Buff)
-				break
-			}
-		}
+		pipe.readCache = append(pipe.readCache, packet.Buff)
 
 		//need ack
 		pipe.acks = append(pipe.acks, packet.No)
@@ -274,17 +275,7 @@ func (pipe *StreamPipe) handleWrite(buff []byte) (err error) {
 			return
 		}
 
-		if len(pipe.outCache) > 0 {
-			pipe.outCache = append(pipe.outCache, packet)
-		} else {
-			//must non-block
-			select {
-			case pipe.outPackets <- packet:
-			default:
-				pipe.outCache = append(pipe.outCache, packet)
-				break
-			}
-		}
+		pipe.outCache = append(pipe.outCache, packet)
 	}
 	return
 }
@@ -302,87 +293,114 @@ func (pipe *StreamPipe) ackCheck() error {
 	return nil
 }
 
-func (pipe *StreamPipe) handleCache() {
-	FIRST:
-	for {
-		if len(pipe.readCache) == 0 {
-			break
-		}
+func (pipe *StreamPipe) selectCases(block bool) (nothing bool, err error) {
+	var cases []reflect.SelectCase
+	var labels []int
 
-		buff := pipe.readCache[0]
-		select {
-		case pipe.reads <- buff:
-			pipe.readCache = pipe.readCache[1:]
-		default:
-			break FIRST
-		}
+	//pipe.inPackets
+	cases = append(cases, reflect.SelectCase{
+		Dir: reflect.SelectRecv,
+		Chan: reflect.ValueOf(pipe.inPackets),
+	})
+	labels = append(labels, selectInPackets)
+
+	//pipe.writes
+	cases = append(cases, reflect.SelectCase{
+		Dir: reflect.SelectRecv,
+		Chan: reflect.ValueOf(pipe.writes),
+	})
+	labels = append(labels, selectWrites)
+
+	//pipe.ackChecker
+	cases = append(cases, reflect.SelectCase{
+		Dir: reflect.SelectRecv,
+		Chan: reflect.ValueOf(pipe.ackChecker.C),
+	})
+	labels = append(labels, selectAckChecker)
+
+	//optional
+	//pipe.reads
+	if len(pipe.readCache) > 0 {
+		cases = append(cases, reflect.SelectCase{
+			Dir: reflect.SelectSend,
+			Chan: reflect.ValueOf(pipe.reads),
+			Send: reflect.ValueOf(pipe.readCache[0]),
+		})
+		labels = append(labels, selectReads)
 	}
 
-	SECOND:
-	for {
-		if len(pipe.outCache) == 0 {
+	//optional
+	//send pipe.outPackets
+	if len(pipe.outCache) > 0 {
+		cases = append(cases, reflect.SelectCase{
+			Dir: reflect.SelectSend,
+			Chan: reflect.ValueOf(pipe.outPackets),
+			Send: reflect.ValueOf(pipe.outCache[0]),
+		})
+		labels = append(labels, selectOutPackets)
+	}
+
+	if block {
+		//pipe.ctx.Done()
+		cases = append(cases, reflect.SelectCase{
+			Dir: reflect.SelectRecv,
+			Chan: reflect.ValueOf(pipe.ctx.Done()),
+		})
+		labels = append(labels, selectContext)
+	} else {
+		cases = append(cases, reflect.SelectCase{
+			Dir: reflect.SelectDefault,
+		})
+		labels = append(labels, selectDefault)
+	}
+
+	chosen, recv, recvOk := reflect.Select(cases)
+	switch labels[chosen] {
+	case selectInPackets:
+		if !recvOk {
 			break
 		}
-
-		packet := pipe.outCache[0]
-		select {
-		case pipe.outPackets <- packet:
-			pipe.outCache = pipe.outCache[1:]
-		default:
-			break SECOND
+		packet := recv.Interface().(*agent.DataPacket)
+		err = pipe.handleInPacket(packet)
+	case selectWrites:
+		if !recvOk {
+			break
 		}
+		buff := recv.Interface().([]byte)
+		err = pipe.handleWrite(buff)
+	case selectAckChecker:
+		err = pipe.ackCheck()
+	case selectReads:
+		pipe.readCache = pipe.readCache[1:]
+	case selectOutPackets:
+		pipe.outCache = pipe.outCache[1:]
+	case selectDefault:
+		//default
+		nothing = true
 	}
+
+	return
 }
 
 func (pipe *StreamPipe) loop() {
 	defer pipe.waitGroup.Done()
 
-	FIRST:
 	for {
-		pipe.handleCache()
-
-		select {
-		case packet := <-pipe.inPackets:
-			err := pipe.handleInPacket(packet)
-			if err != nil {
-				pipe.cancel(err)
-				return
-			}
-		case buff := <-pipe.writes:
-			err := pipe.handleWrite(buff)
-			if err != nil {
-				pipe.cancel(err)
-				return
-			}
-		case <-pipe.ackChecker.C:
-			err := pipe.ackCheck()
-			if err != nil {
-				pipe.cancel(err)
-				return
-			}
-		case <-pipe.ctx.Done():
-			break FIRST
+		_, err := pipe.selectCases(true)
+		if err != nil {
+			pipe.cancel(err)
+			break
 		}
 	}
 
 	for {
-		pipe.handleCache()
-
-		select {
-		case packet := <-pipe.inPackets:
-			err := pipe.handleInPacket(packet)
-			if err != nil {
-				pipe.cancel(err)
-				return
-			}
-		case buff := <-pipe.writes:
-			err := pipe.handleWrite(buff)
-			if err != nil {
-				pipe.cancel(err)
-				return
-			}
-		default:
-			return
+		nothing, err := pipe.selectCases(true)
+		if err != nil {
+			pipe.cancel(err)
+			break
+		}
+		if nothing {
+			break
 		}
 	}
 }
