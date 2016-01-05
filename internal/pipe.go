@@ -420,14 +420,23 @@ func (pipe *StreamPipe) Err() error {
 	pipe.locker.Lock()
 	defer pipe.locker.Unlock()
 
-	return pipe.err
+	if pipe.err != nil {
+		return pipe.err
+	}
+
+	return pipe.ctx.Err()
 }
 
 func (pipe*StreamPipe) cancel(err error) {
+	if err == nil {
+		panic("context: internal error: missing cancel error")
+	}
+
 	pipe.locker.Lock()
 	defer pipe.locker.Unlock()
 
-	if pipe.err != nil {
+	if pipe.Err() != nil {
+		//already canceled
 		return
 	}
 
