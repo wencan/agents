@@ -11,7 +11,6 @@ import (
 	"errors"
 	"net"
 	"reflect"
-	"log"
 )
 
 const (
@@ -123,7 +122,7 @@ func (pipe *StreamPipe) readLoop() {
 		packet, err := pipe.raw.Recv()
 		if err != nil {
 			pipe.cancel(err)
-			return
+			break
 		}
 
 		pipe.inPackets <- packet
@@ -150,11 +149,12 @@ func (pipe *StreamPipe) writeLoop() {
 	}
 
 	//handle remain packet
+	SECOND:
 	for {
 		select {
 		case packet := <-pipe.outPackets:
 			if discard {
-				log.Println("discard packet, No:", packet.No)
+				//log.Println("discard packet, No:", packet.No)
 				break
 			}
 
@@ -164,7 +164,17 @@ func (pipe *StreamPipe) writeLoop() {
 				discard = true
 			}
 		default:
-			return
+			break SECOND
+		}
+	}
+
+	if !discard {
+		//client actively close the stream
+		//server wait for the peer to close the stream
+		if s, ok := pipe.raw.(grpc.ClientStream); ok {
+			if err := s.CloseSend(); err != nil {
+				pipe.cancel(err)
+			}
 		}
 	}
 }
@@ -293,7 +303,7 @@ func (pipe *StreamPipe) ackCheck() error {
 	return nil
 }
 
-func (pipe *StreamPipe) selectCases(block bool) (nothing bool, err error) {
+func (pipe *StreamPipe) selectCases(block bool) (label int, err error) {
 	var cases []reflect.SelectCase
 	var labels []int
 
@@ -318,7 +328,6 @@ func (pipe *StreamPipe) selectCases(block bool) (nothing bool, err error) {
 	})
 	labels = append(labels, selectAckChecker)
 
-	//optional
 	//pipe.reads
 	if len(pipe.readCache) > 0 {
 		cases = append(cases, reflect.SelectCase{
@@ -329,7 +338,6 @@ func (pipe *StreamPipe) selectCases(block bool) (nothing bool, err error) {
 		labels = append(labels, selectReads)
 	}
 
-	//optional
 	//send pipe.outPackets
 	if len(pipe.outCache) > 0 {
 		cases = append(cases, reflect.SelectCase{
@@ -355,7 +363,8 @@ func (pipe *StreamPipe) selectCases(block bool) (nothing bool, err error) {
 	}
 
 	chosen, recv, recvOk := reflect.Select(cases)
-	switch labels[chosen] {
+	label = labels[chosen]
+	switch label {
 	case selectInPackets:
 		if !recvOk {
 			break
@@ -376,7 +385,6 @@ func (pipe *StreamPipe) selectCases(block bool) (nothing bool, err error) {
 		pipe.outCache = pipe.outCache[1:]
 	case selectDefault:
 		//default
-		nothing = true
 	}
 
 	return
@@ -386,20 +394,23 @@ func (pipe *StreamPipe) loop() {
 	defer pipe.waitGroup.Done()
 
 	for {
-		_, err := pipe.selectCases(true)
+		chosen, err := pipe.selectCases(true)
 		if err != nil {
 			pipe.cancel(err)
+			break
+		}
+		if chosen == selectContext {
 			break
 		}
 	}
 
 	for {
-		nothing, err := pipe.selectCases(true)
+		chosen, err := pipe.selectCases(false)
 		if err != nil {
 			pipe.cancel(err)
 			break
 		}
-		if nothing {
+		if chosen == selectDefault {
 			break
 		}
 	}
@@ -460,7 +471,11 @@ func (pipe *StreamPipe) Read(buff []byte) (n int, err error) {
 				return n, err
 			}
 		case <-pipe.ctx.Done():
-			return n, pipe.Err()
+			if n > 0 {
+				return n, nil
+			} else {
+				return n, pipe.Err()
+			}
 		}
 	}
 
@@ -492,14 +507,6 @@ func (pipe *StreamPipe) CloseWithError(e error) (err error) {
 			e = io.EOF
 		}
 		pipe.cancel(e)
-	}
-
-	//client actively close the stream
-	// server wait for the peer to close the stream
-	if s, ok := pipe.raw.(grpc.ClientStream); ok {
-		if err = s.CloseSend(); err != nil {
-			return err
-		}
 	}
 
 	pipe.waitGroup.Wait()
