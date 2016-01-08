@@ -323,10 +323,14 @@ func (srv *AgentServer) checkAndRemove() {
 
 	for session, sInfo := range srv.sessions {
 		if now.Sub(sInfo.lastKeep) > defaultPingMaxDelay {
+			//kick
 			close(sInfo.done)
 			delete(srv.sessions, session)
+			for _, proxy := range sInfo.proxies {
+				proxy.Close()
+			}
 
-			log.Println("Delete invaild session:", session)
+			log.Println("Kick invaild session:", session)
 		}
 	}
 }

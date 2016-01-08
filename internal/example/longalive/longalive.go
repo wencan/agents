@@ -37,7 +37,6 @@ func main() {
 	if err != nil {
 		log.Fatalln(err)
 	}
-
 	defer client.Close()
 
 	var conn net.Conn
