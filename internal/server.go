@@ -179,6 +179,8 @@ func (srv *AgentServer) Connect(ctx context.Context, req *agent.ConnectRequest) 
 		return nil, err
 	}
 
+	log.Println("Connecting:", req.Remote.Address)
+
 	var conn net.Conn
 	if conn, err = net.Dial(req.Remote.Network, req.Remote.Address); err != nil {
 		return nil, err
@@ -201,8 +203,6 @@ func (srv *AgentServer) Connect(ctx context.Context, req *agent.ConnectRequest) 
 			Address: conn.LocalAddr().String(),
 		},
 	}
-
-	log.Println("New channel:", fmt.Sprintf("%s@%s", channel, session))
 
 	return reply, nil
 }
@@ -252,8 +252,6 @@ func (srv *AgentServer) Exchange(stream agent.Agent_ExchangeServer) (err error) 
 	}
 
 	pipe := NewStreamPipe(context.Background(), stream)
-
-	log.Println("New proxy:", fmt.Sprintf("%s@%s", channel, session))
 
 	//proxy
 	//until error(contain eof)
@@ -308,6 +306,9 @@ func (srv *AgentServer) Bye(ctx context.Context, req *agent.Empty) (reply *agent
 	} else {
 		close(sInfo.done)
 		delete(srv.sessions, session)
+		for _, proxy := range sInfo.proxies {
+			proxy.Close()
+		}
 
 		log.Println("Byte:", session)
 	}
