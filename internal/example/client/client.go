@@ -7,11 +7,14 @@ import (
 	"net/http"
 	"io/ioutil"
 	"log"
+	"golang.org/x/net/context"
+	"time"
 )
 
 func main() {
 	var opts []grpc.DialOption
 	opts = append(opts, grpc.WithInsecure())
+	//opts = append(opts, grpc.WithBlock())
 
 	//enable snappy compress
 	if c, err := codec.New("snappy"); err != nil {
@@ -24,18 +27,17 @@ func main() {
 		}
 	}
 
-	client, err := internal.Dial("127.0.0.1:8080", nil, opts...)
+	client, err := internal.NewAgentClient("127.0.0.1:8080", nil, opts...)
 	if err != nil {
 		log.Fatalln(err)
 	}
 	defer client.Close()
 
-	//test Divide
-	client, err = client.Divide()
+	ctx, _ := context.WithTimeout(context.Background(), time.Second * 10)
+	err = client.Login(ctx, nil)
 	if err != nil {
 		log.Fatalln(err)
 	}
-	defer client.Close()
 
 	transport := &http.Transport{
 		Dial: client.Dial,

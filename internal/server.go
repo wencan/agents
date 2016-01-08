@@ -5,41 +5,12 @@ import (
 	"golang.org/x/net/context"
 	"code.google.com/p/go-uuid/uuid"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"time"
 	"sync"
 	"net"
 	"log"
 	"fmt"
-)
-
-const (
-	versionMajor uint32 = 1;
-	versionMinor uint32 = 0;
-
-	defaultContextTimeout time.Duration = 60 * time.Second
-
-	defaultPingDelay time.Duration = 60 * time.Second
-	defaultPingMaxDelay time.Duration = 120 * time.Second
-	defaultPingCheckDelay time.Duration = time.Minute
-	defaultPacketMaxBytes int = 1024 * 512
-	defaultAckMaxDelay time.Duration = 10 * time.Second
-	defaultAckCheckDelay time.Duration = 10 * time.Second
-)
-
-var (
-	gerrVersionNotSupported = grpc.Errorf(codes.Aborted, "version not supported")
-	gerrSessionLoss error = grpc.Errorf(codes.DataLoss, "session loss")
-	gerrChannelLoss error = grpc.Errorf(codes.DataLoss, "channel loss")
-	gerrSessionInvaild error = grpc.Errorf(codes.PermissionDenied, "session invaild")
-	gerrChannelInvaild error = grpc.Errorf(codes.PermissionDenied, "channel invaild")
-	gerrUnauthenticated error = grpc.Errorf(codes.PermissionDenied, "unauthenticated or authenticate fail")
-	gerrHeartbeatTimeout error = grpc.Errorf(codes.DeadlineExceeded, "heartbeat timeout")
-	gerrNetworkNotSupported = grpc.Errorf(codes.Canceled, "network type not supported")
-	gerrSessonEnded error = grpc.Errorf(codes.Canceled, "session ended")
-	gerrAckTimeout error = grpc.Errorf(codes.Canceled, "ack timeout")
-	gerrOther = grpc.Errorf(codes.Canceled, "other...")
 )
 
 type Session struct {

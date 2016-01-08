@@ -11,6 +11,8 @@ import (
 	"errors"
 	"net"
 	"reflect"
+	"unsafe"
+	"sync/atomic"
 )
 
 const (
@@ -72,8 +74,7 @@ type StreamPipe struct {
 	wBuffer    bytes.Buffer
 	rBuffer    bytes.Buffer
 
-	locker     sync.Mutex
-	err        error
+	err        unsafe.Pointer
 
 	ackChecker *time.Ticker
 
@@ -416,12 +417,10 @@ func (pipe *StreamPipe) loop() {
 	}
 }
 
-func (pipe *StreamPipe) Err() error {
-	pipe.locker.Lock()
-	defer pipe.locker.Unlock()
-
-	if pipe.err != nil {
-		return pipe.err
+func (pipe *StreamPipe) Err() (err error) {
+	err = *(*error)(atomic.LoadPointer(&pipe.err))
+	if err != nil {
+		return err
 	}
 
 	return pipe.ctx.Err()
@@ -432,16 +431,12 @@ func (pipe*StreamPipe) cancel(err error) {
 		panic("context: internal error: missing cancel error")
 	}
 
-	pipe.locker.Lock()
-	defer pipe.locker.Unlock()
+	atomic.CompareAndSwapPointer(&pipe.err, nil, unsafe.Pointer(&err))
 
-	if pipe.Err() != nil {
+	if pipe.ctx.Err() != nil {
 		//already canceled
 		return
 	}
-
-	pipe.err = err
-
 	pipe.cancelFunc()
 }
 
@@ -511,12 +506,10 @@ func (pipe *StreamPipe) Write(buff []byte) (n int, err error) {
 }
 
 func (pipe *StreamPipe) CloseWithError(e error) (err error) {
-	if pipe.Err() == nil {
-		if e == nil {
-			e = io.EOF
-		}
-		pipe.cancel(e)
+	if e == nil {
+		e = io.EOF
 	}
+	pipe.cancel(e)
 
 	pipe.waitGroup.Wait()
 	return nil

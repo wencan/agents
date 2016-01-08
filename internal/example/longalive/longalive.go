@@ -9,6 +9,7 @@ import (
 	"time"
 	"fmt"
 	"math/rand"
+	"golang.org/x/net/context"
 )
 
 
@@ -27,10 +28,16 @@ func main() {
 		}
 	}
 
-	client, err := internal.Dial("127.0.0.1:8080", nil, opts...)
+	client, err := internal.NewAgentClient("127.0.0.1:8080", nil, opts...)
 	if err != nil {
 		log.Fatalln(err)
 	}
+	ctx, _ := context.WithTimeout(context.Background(), time.Second * 10)
+	err = client.Login(ctx, nil)
+	if err != nil {
+		log.Fatalln(err)
+	}
+
 	defer client.Close()
 
 	var conn net.Conn
@@ -60,8 +67,8 @@ func main() {
 	}()
 
 	for {
-		now := <- time.After(time.Millisecond * 200)
-		//now := time.Now()
+		//now := <- time.After(time.Millisecond * 200)
+		now := time.Now()
 
 		s := fmt.Sprintf("%d: %s", rand.Int31(), now.String())
 		log.Println("Write", s)
