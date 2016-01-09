@@ -297,10 +297,11 @@ func (client *AgentClient) WaitForStateChange(ctx context.Context, sourceState A
 		select {
 		case <- client.ctx.Done():
 			err = client.ctx.Err()
+			client.stateWait.Broadcast()
 		case <- ctx.Done():
 			err = ctx.Err()
-		case <- done:
 			client.stateWait.Broadcast()
+		case <- done:
 		}
 	}()
 
