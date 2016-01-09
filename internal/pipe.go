@@ -95,6 +95,10 @@ func NewStreamPipe(ctx context.Context, stream agentStream) *StreamPipe {
 		ackChecker: time.NewTicker(defaultAckCheckDelay),
 	}
 
+	//init pipe.err as nil
+	var right error
+	atomic.StorePointer(&pipe.err, unsafe.Pointer(&right))
+
 	pipe.waitGroup.Add(3)
 	go pipe.readLoop()
 	go pipe.writeLoop()
@@ -192,11 +196,7 @@ func (pipe *StreamPipe) preparePacket(first []byte) (packet *agent.DataPacket, e
 
 	cap := defaultPacketMaxBytes
 	DONE:
-	for {
-		if cap == 0 {
-			break
-		}
-
+	for cap >= 0 {
 		if pipe.wBuffer.Len() > 0 {
 			len := intMin(cap, pipe.wBuffer.Len())
 			buff := make([]byte, len)
