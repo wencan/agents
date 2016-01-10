@@ -45,7 +45,7 @@ type AgentClient struct {
 	stateWait  sync.Cond
 	state      AgentClientState
 
-	logins     chan struct{}
+	logins     chan int
 
 	err        unsafe.Pointer
 }
@@ -67,6 +67,7 @@ func NewAgentClient(target string, pass Passport, opts ...grpc.DialOption) (clie
 		cancelFunc: cancelFunc,
 		raw: cc,
 		conn: conn,
+		logins: make(chan int, 1),
 	}
 	client.state = Offline
 	client.stateWait.L = &client.stateMutex
@@ -106,6 +107,7 @@ func NewAgentClient(target string, pass Passport, opts ...grpc.DialOption) (clie
 			case grpc.Connecting:
 			case grpc.Ready:			//connected or reconnected
 				client.changeState(Logoff)
+				client.logins <- 1
 			case grpc.TransientFailure:
 				client.changeState(Offline)
 			case grpc.Shutdown:
