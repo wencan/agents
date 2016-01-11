@@ -6,8 +6,6 @@ const (
 	versionMajor uint32 = 1;
 	versionMinor uint32 = 0;
 
-	defaultContextTimeout time.Duration = 60 * time.Second
-
 	defaultPingDelay time.Duration = 60 * time.Second
 	defaultPingMaxDelay time.Duration = 120 * time.Second
 	defaultPingCheckDelay time.Duration = time.Minute

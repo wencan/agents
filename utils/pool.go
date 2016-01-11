@@ -5,6 +5,8 @@ import (
 	"errors"
 )
 
+func defaultDelete (x interface{}) {}
+
 type Pool struct {
 	new         func() interface{}
 	delete      func(interface{})
@@ -22,6 +24,10 @@ type Pool struct {
 func NewPool(new func() interface{}, delete func(interface{}), size int) (p *Pool) {
 	if size <= 0 {
 		panic(errors.New("pool size error"))
+	}
+
+	if delete == nil {
+		delete = defaultDelete
 	}
 
 	p = &Pool{
