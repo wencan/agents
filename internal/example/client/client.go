@@ -7,8 +7,6 @@ import (
 	"net/http"
 	"io/ioutil"
 	"log"
-	"golang.org/x/net/context"
-	"time"
 )
 
 func main() {
@@ -32,12 +30,6 @@ func main() {
 		log.Fatalln(err)
 	}
 	defer client.Close()
-
-	ctx, _ := context.WithTimeout(context.Background(), time.Second * 10)
-	err = client.Login(ctx, nil)
-	if err != nil {
-		log.Fatalln(err)
-	}
 
 	transport := &http.Transport{
 		Dial: client.Dial,

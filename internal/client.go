@@ -45,11 +45,9 @@ type AgentClient struct {
 	stateWait  sync.Cond
 	state      AgentClientState
 
-	loginMutex sync.Mutex
+	logins     chan int
 
 	err        unsafe.Pointer
-
-	pingTicker *time.Ticker
 }
 
 func NewAgentClient(target string, pass Passport, opts ...grpc.DialOption) (client *AgentClient, err error) {
@@ -69,10 +67,14 @@ func NewAgentClient(target string, pass Passport, opts ...grpc.DialOption) (clie
 		cancelFunc: cancelFunc,
 		raw: cc,
 		conn: conn,
-		pingTicker: time.NewTicker(defaultPingDelay),
+		logins: make(chan int, 1),
 	}
 	client.state = Offline
 	client.stateWait.L = &client.stateMutex
+
+	//init client.err as nil
+	var right error
+	atomic.StorePointer(&client.err, unsafe.Pointer(&right))
 
 	//sync state
 	client.waitGroup.Add(1)
@@ -105,6 +107,7 @@ func NewAgentClient(target string, pass Passport, opts ...grpc.DialOption) (clie
 			case grpc.Connecting:
 			case grpc.Ready:			//connected or reconnected
 				client.changeState(Logoff)
+				client.logins <- 1
 			case grpc.TransientFailure:
 				client.changeState(Offline)
 			case grpc.Shutdown:
@@ -119,10 +122,7 @@ func NewAgentClient(target string, pass Passport, opts ...grpc.DialOption) (clie
 	return
 }
 
-func (client *AgentClient) Login(ctx context.Context, pass Passport) (err error) {
-	client.loginMutex.Lock()
-	defer client.loginMutex.Unlock()
-
+func (client *AgentClient) login(ctx context.Context) (err error) {
 	if client.State() == Logon {
 		return nil
 	}
@@ -142,17 +142,15 @@ func (client *AgentClient) Login(ctx context.Context, pass Passport) (err error)
 		client.session = reply.Session
 		client.changeState(Logon)
 	} else {
-		client.pass = pass
-
-		if pass == nil {
+		if client.pass == nil {
 			return errors.New("need authenticate")
 		}
-		if reply.AuthMethod != pass.Type() {
+		if reply.AuthMethod != client.pass.Type() {
 			return errors.New("passport type unrecognized")
 		}
 
 		var authReq *agent.AuthRequest
-		authReq, err = pass.ToProto()
+		authReq, err = client.pass.ToProto()
 		if err != nil {
 			return
 		}
@@ -170,7 +168,12 @@ func (client *AgentClient) Login(ctx context.Context, pass Passport) (err error)
 	return nil
 }
 
-func (client *AgentClient) Ping() error {
+func (client *AgentClient) Ping() (err error) {
+	err = client.Wait(context.Background())
+	if err != nil {
+		return err
+	}
+
 	md := metadata.New(map[string]string{
 		"session": client.session,
 	})
@@ -181,19 +184,6 @@ func (client *AgentClient) Ping() error {
 	}
 
 	pong, err := client.raw.Heartbeat(ctx, ping)
-	if err == gerrSessionInvaild {
-		//relogin
-		err = client.Login(client.ctx, client.pass)
-
-		if err == nil {
-			md := metadata.New(map[string]string{
-				"session": client.session,
-			})
-			ctx := metadata.NewContext(client.ctx, md)
-
-			pong, err = client.raw.Heartbeat(ctx, ping)
-		}
-	}
 	if err != nil {
 		return err
 	} else if ping.AppData != pong.AppData {
@@ -206,15 +196,26 @@ func (client *AgentClient) Ping() error {
 func (client *AgentClient) loop() {
 	defer client.waitGroup.Done()
 
+	err := client.login(context.Background())
+	if err != nil {
+		client.cancel(err)
+		return
+	}
+
 	for {
 		select {
 		case <-client.ctx.Done():
 			return
-		case <-client.pingTicker.C:
+		case <-client.logins:
+			err := client.login(context.Background())
+			if err != nil {
+				client.cancel(err)
+				return
+			}
+		case <-time.After(defaultPingCheckDelay):
 			if client.State() != Logon {
 				break
 			}
-
 			if err := client.Ping(); err != nil {
 				client.cancel(err)
 				return
@@ -224,6 +225,11 @@ func (client *AgentClient) loop() {
 }
 
 func (client *AgentClient) Dial(network, address string) (conn net.Conn, err error) {
+	err = client.Wait(context.Background())
+	if err != nil {
+		return nil, err
+	}
+
 	md := metadata.New(map[string]string{
 		"session": client.session,
 	})
@@ -238,19 +244,6 @@ func (client *AgentClient) Dial(network, address string) (conn net.Conn, err err
 
 	var reply *agent.ConnectReply
 	reply, err = client.raw.Connect(ctx, req)
-	if err == gerrSessionInvaild {
-		//relogin
-		err = client.Login(context.Background(), client.pass)
-
-		if err == nil {
-			md := metadata.New(map[string]string{
-				"session": client.session,
-			})
-			ctx := metadata.NewContext(client.ctx, md)
-
-			reply, err = client.raw.Connect(ctx, req)
-		}
-	}
 	if err != nil {
 		return nil, err
 	}
@@ -297,10 +290,11 @@ func (client *AgentClient) WaitForStateChange(ctx context.Context, sourceState A
 		select {
 		case <- client.ctx.Done():
 			err = client.ctx.Err()
+			client.stateWait.Broadcast()
 		case <- ctx.Done():
 			err = ctx.Err()
-		case <- done:
 			client.stateWait.Broadcast()
+		case <- done:
 		}
 	}()
 

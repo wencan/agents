@@ -9,7 +9,6 @@ import (
 	"time"
 	"fmt"
 	"math/rand"
-	"golang.org/x/net/context"
 )
 
 
@@ -32,12 +31,6 @@ func main() {
 	if err != nil {
 		log.Fatalln(err)
 	}
-	ctx, _ := context.WithTimeout(context.Background(), time.Second * 10)
-	err = client.Login(ctx, nil)
-	if err != nil {
-		log.Fatalln(err)
-	}
-	defer client.Close()
 
 	var conn net.Conn
 	conn, err = client.Dial("tcp", "127.0.0.1:8888")

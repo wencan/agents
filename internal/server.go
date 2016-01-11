@@ -10,7 +10,6 @@ import (
 	"sync"
 	"net"
 	"log"
-	"fmt"
 )
 
 type Session struct {
