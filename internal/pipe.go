@@ -95,10 +95,6 @@ func NewStreamPipe(stream agentStream) *StreamPipe {
 		ackChecker: time.NewTicker(defaultAckCheckDelay),
 	}
 
-	//init pipe.err as nil
-	var right error
-	atomic.StorePointer(&pipe.err, unsafe.Pointer(&right))
-
 	pipe.waitGroup.Add(3)
 	go pipe.readLoop()
 	go pipe.writeLoop()
@@ -422,9 +418,9 @@ func (pipe *StreamPipe) loop() {
 }
 
 func (pipe *StreamPipe) Err() (err error) {
-	err = *(*error)(atomic.LoadPointer(&pipe.err))
-	if err != nil {
-		return err
+	p := (*error)(atomic.LoadPointer(&pipe.err))
+	if p != nil {
+		return *p
 	}
 
 	return pipe.ctx.Err()

@@ -63,10 +63,6 @@ func NewClient(target string, pass Passport, opts ...grpc.DialOption) (client *C
 	client.state = Offline
 	client.stateWait.L = &client.stateMutex
 
-	//init client.err as nil
-	var right error
-	atomic.StorePointer(&client.err, unsafe.Pointer(&right))
-
 	//sync state
 	client.waitGroup.Add(1)
 	go func() {
@@ -323,9 +319,9 @@ func (client *Client) Wait(ctx context.Context) (err error) {
 }
 
 func (client *Client) Err() (err error) {
-	err = *(*error)(atomic.LoadPointer(&client.err))
-	if err != nil {
-		return err
+	p := (*error)(atomic.LoadPointer(&client.err))
+	if p != nil {
+		return *p
 	}
 
 	return client.ctx.Err()
