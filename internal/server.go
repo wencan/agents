@@ -250,7 +250,7 @@ func (srv *Server) Exchange(stream agent.Agent_ExchangeServer) (err error) {
 		return err
 	}
 
-	pipe := NewStreamPipe(stream, nil)
+	pipe := NewStreamPipe(stream)
 
 	//proxy
 	//until error(contain eof)

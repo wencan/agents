@@ -82,13 +82,12 @@ type StreamPipe struct {
 	serial     uint32
 }
 
-func NewStreamPipe(stream agentStream, cc *ClientConn) *StreamPipe {
+func NewStreamPipe(stream agentStream) *StreamPipe {
 	ctx, cancelFunc := context.WithCancel(context.Background())
 	pipe := &StreamPipe{
 		ctx: ctx,
 		cancelFunc:cancelFunc,
 		raw: stream,
-		cc: cc,
 		inPackets: make(chan *agent.DataPacket, 10),
 		outPackets: make(chan *agent.DataPacket, 10),
 		reads: make(chan []byte, 10),
@@ -106,6 +105,10 @@ func NewStreamPipe(stream agentStream, cc *ClientConn) *StreamPipe {
 	go pipe.loop()
 
 	return pipe
+}
+
+func (pipe *StreamPipe) Attach(cc *ClientConn) {
+	pipe.cc = cc
 }
 
 func (pipe *StreamPipe) incrSerial() uint32 {

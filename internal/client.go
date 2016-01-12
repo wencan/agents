@@ -249,7 +249,9 @@ func (client *Client) Dial(network, address string) (conn net.Conn, err error) {
 		return nil, err
 	}
 
-	return NewStreamPipe(stream, client.cc.Fork()), nil
+	pipe := NewStreamPipe(stream)
+	pipe.Attach(client.cc.Fork())
+	return pipe, nil
 }
 
 func (client *Client) State() AgentClientState {
