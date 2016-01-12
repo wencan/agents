@@ -302,7 +302,7 @@ func (pipe *StreamPipe) ackCheck() error {
 
 	t := pipe.unAcks[0].t
 	if time.Now().Sub(t) > defaultAckMaxDelay {
-		return errors.New("ack timeout")
+		return ErrAckTimeout
 	}
 
 	return nil

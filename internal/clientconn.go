@@ -34,6 +34,10 @@ func Dial(target string, opts ...grpc.DialOption) (cc *ClientConn, err error) {
 	return cc, nil
 }
 
+func (cc *ClientConn) Ref() int32 {
+	return atomic.AddInt32(cc.ref, 0)
+}
+
 func (cc *ClientConn) Fork() *ClientConn {
 	atomic.AddInt32(cc.ref, 1)
 	return &ClientConn{
@@ -51,10 +55,10 @@ func (cc *ClientConn) WaitForStateChange(ctx context.Context, sourceState grpc.C
 	return cc.conn.WaitForStateChange(ctx, sourceState)
 }
 
-func (client *ClientConn) Close() (err error) {
-	ref := atomic.AddInt32(client.ref, -1)
+func (cc *ClientConn) Close() (err error) {
+	ref := atomic.AddInt32(cc.ref, -1)
 	if ref == 0 {
-		return client.conn.Close()
+		return cc.conn.Close()
 	}
 
 	return nil
