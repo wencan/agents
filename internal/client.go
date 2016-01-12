@@ -362,7 +362,7 @@ func (client *Client) CloseWithError(e error) (err error) {
 		}
 	}
 
-	client.cancel(err)		// Will trigger all the stream object is canceled
+	client.cancel(err)
 	client.waitGroup.Wait()
 
 	return client.cc.Close()
