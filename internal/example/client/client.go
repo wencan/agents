@@ -25,7 +25,7 @@ func main() {
 		}
 	}
 
-	client, err := internal.NewAgentClient("127.0.0.1:8080", nil, opts...)
+	client, err := internal.NewClient("127.0.0.1:8080", nil, opts...)
 	if err != nil {
 		log.Fatalln(err)
 	}
@@ -34,6 +34,7 @@ func main() {
 	transport := &http.Transport{
 		Dial: client.Dial,
 	}
+	defer transport.CloseIdleConnections()
 	httpc := http.Client{Transport: transport}
 
 	websites := []string{

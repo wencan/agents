@@ -56,6 +56,7 @@ type StreamPipe struct {
 	cancelFunc context.CancelFunc
 
 	raw        agentStream
+	cc         *ClientConn		//may is nil
 
 	waitGroup  sync.WaitGroup
 
@@ -81,13 +82,13 @@ type StreamPipe struct {
 	serial     uint32
 }
 
-func NewStreamPipe(ctx context.Context, stream agentStream) *StreamPipe {
-	var cancelFunc context.CancelFunc
-	ctx, cancelFunc = context.WithCancel(ctx)
+func NewStreamPipe(stream agentStream, cc *ClientConn) *StreamPipe {
+	ctx, cancelFunc := context.WithCancel(context.Background())
 	pipe := &StreamPipe{
 		ctx: ctx,
 		cancelFunc:cancelFunc,
 		raw: stream,
+		cc: cc,
 		inPackets: make(chan *agent.DataPacket, 10),
 		outPackets: make(chan *agent.DataPacket, 10),
 		reads: make(chan []byte, 10),
@@ -512,6 +513,11 @@ func (pipe *StreamPipe) CloseWithError(e error) (err error) {
 	pipe.cancel(e)
 
 	pipe.waitGroup.Wait()
+
+	if pipe.cc != nil {
+		return pipe.cc.Close()
+	}
+
 	return nil
 }
 

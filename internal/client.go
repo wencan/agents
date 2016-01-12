@@ -25,9 +25,8 @@ const (
 	Die
 )
 
-type AgentClient struct {
-	target     string
-	opts       []grpc.DialOption
+type Client struct {
+	cc         *ClientConn
 
 	pass       Passport
 
@@ -36,38 +35,30 @@ type AgentClient struct {
 
 	waitGroup  sync.WaitGroup
 
-	raw        agent.AgentClient
-	conn       *grpc.ClientConn
-
 	session    string
 
 	stateMutex sync.Mutex
 	stateWait  sync.Cond
 	state      AgentClientState
 
-	logins     chan int
+	logins     chan interface{}
 
 	err        unsafe.Pointer
 }
 
-func NewAgentClient(target string, pass Passport, opts ...grpc.DialOption) (client *AgentClient, err error) {
-	conn, err := grpc.Dial(target, opts...)
+func NewClient(target string, pass Passport, opts ...grpc.DialOption) (client *Client, err error) {
+	cc, err := Dial(target, opts...)
 	if err != nil {
 		return nil, err
 	}
 
-	cc := agent.NewAgentClient(conn)
-
 	ctx, cancelFunc := context.WithCancel(context.Background())
-	client = &AgentClient{
-		target: target,
-		opts: append([]grpc.DialOption{}, opts...),	//deep copy
+	client = &Client{
+		cc: cc,
 		pass: pass,
 		ctx: ctx,
 		cancelFunc: cancelFunc,
-		raw: cc,
-		conn: conn,
-		logins: make(chan int, 1),
+		logins: make(chan interface{}, 1),
 	}
 	client.state = Offline
 	client.stateWait.L = &client.stateMutex
@@ -93,12 +84,12 @@ func NewAgentClient(target string, pass Passport, opts ...grpc.DialOption) (clie
 
 		for {
 			var state grpc.ConnectivityState
-			state, err = client.conn.State()
+			state, err = client.cc.State()
 			if err != nil {
 				return
 			}
 
-			state, err = client.conn.WaitForStateChange(client.ctx, state)
+			state, err = client.cc.WaitForStateChange(client.ctx, state)
 			if err != nil {
 				return
 			}
@@ -122,7 +113,7 @@ func NewAgentClient(target string, pass Passport, opts ...grpc.DialOption) (clie
 	return
 }
 
-func (client *AgentClient) login(ctx context.Context) (err error) {
+func (client *Client) login(ctx context.Context) (err error) {
 	if client.State() == Logon {
 		return nil
 	}
@@ -133,7 +124,7 @@ func (client *AgentClient) login(ctx context.Context) (err error) {
 	}
 
 	var reply *agent.HelloReply
-	reply, err = client.raw.Hello(ctx, req)
+	reply, err = client.cc.Hello(ctx, req)
 	if err != nil {
 		return err
 	}
@@ -156,7 +147,7 @@ func (client *AgentClient) login(ctx context.Context) (err error) {
 		}
 
 		var authReply *agent.AuthReply
-		authReply, err = client.raw.Auth(ctx, authReq)
+		authReply, err = client.cc.Auth(ctx, authReq)
 		if err != nil {
 			return
 		}
@@ -168,7 +159,7 @@ func (client *AgentClient) login(ctx context.Context) (err error) {
 	return nil
 }
 
-func (client *AgentClient) Ping() (err error) {
+func (client *Client) Ping() (err error) {
 	err = client.Wait(context.Background())
 	if err != nil {
 		return err
@@ -183,7 +174,7 @@ func (client *AgentClient) Ping() (err error) {
 		AppData: time.Now().String(),
 	}
 
-	pong, err := client.raw.Heartbeat(ctx, ping)
+	pong, err := client.cc.Heartbeat(ctx, ping)
 	if err != nil {
 		return err
 	} else if ping.AppData != pong.AppData {
@@ -193,7 +184,7 @@ func (client *AgentClient) Ping() (err error) {
 	return nil
 }
 
-func (client *AgentClient) loop() {
+func (client *Client) loop() {
 	defer client.waitGroup.Done()
 
 	err := client.login(context.Background())
@@ -224,7 +215,7 @@ func (client *AgentClient) loop() {
 	}
 }
 
-func (client *AgentClient) Dial(network, address string) (conn net.Conn, err error) {
+func (client *Client) Dial(network, address string) (conn net.Conn, err error) {
 	err = client.Wait(context.Background())
 	if err != nil {
 		return nil, err
@@ -243,7 +234,7 @@ func (client *AgentClient) Dial(network, address string) (conn net.Conn, err err
 	}
 
 	var reply *agent.ConnectReply
-	reply, err = client.raw.Connect(ctx, req)
+	reply, err = client.cc.Connect(ctx, req)
 	if err != nil {
 		return nil, err
 	}
@@ -254,21 +245,21 @@ func (client *AgentClient) Dial(network, address string) (conn net.Conn, err err
 	})
 	ctx = metadata.NewContext(client.ctx, md)
 	var stream agent.Agent_ExchangeClient
-	if stream, err = client.raw.Exchange(ctx); err != nil {
+	if stream, err = client.cc.Exchange(ctx); err != nil {
 		return nil, err
 	}
 
-	return NewStreamPipe(ctx, stream), nil
+	return NewStreamPipe(stream, client.cc.Fork()), nil
 }
 
-func (client *AgentClient) State() AgentClientState {
+func (client *Client) State() AgentClientState {
 	client.stateMutex.Lock()
 	defer client.stateMutex.Unlock()
 
 	return client.state
 }
 
-func (client *AgentClient) changeState(state AgentClientState) {
+func (client *Client) changeState(state AgentClientState) {
 	client.stateMutex.Lock()
 	defer client.stateMutex.Unlock()
 
@@ -277,7 +268,7 @@ func (client *AgentClient) changeState(state AgentClientState) {
 }
 
 //blocks until the state change, or context is done
-func (client *AgentClient) WaitForStateChange(ctx context.Context, sourceState AgentClientState) (state AgentClientState, err error) {
+func (client *Client) WaitForStateChange(ctx context.Context, sourceState AgentClientState) (state AgentClientState, err error) {
 	client.stateMutex.Lock()
 	defer client.stateMutex.Unlock()
 
@@ -311,7 +302,7 @@ func (client *AgentClient) WaitForStateChange(ctx context.Context, sourceState A
 }
 
 //blocks until the client is logon or ctx is done
-func (client *AgentClient) Wait(ctx context.Context) (err error) {
+func (client *Client) Wait(ctx context.Context) (err error) {
 	state := Idle
 
 	for {
@@ -329,7 +320,7 @@ func (client *AgentClient) Wait(ctx context.Context) (err error) {
 	}
 }
 
-func (client *AgentClient) Err() (err error) {
+func (client *Client) Err() (err error) {
 	err = *(*error)(atomic.LoadPointer(&client.err))
 	if err != nil {
 		return err
@@ -338,7 +329,7 @@ func (client *AgentClient) Err() (err error) {
 	return client.ctx.Err()
 }
 
-func (client *AgentClient) cancel(err error) {
+func (client *Client) cancel(err error) {
 	if err == nil {
 		panic("AgentClient: internal error: missing cancel error")
 	}
@@ -352,7 +343,7 @@ func (client *AgentClient) cancel(err error) {
 	client.cancelFunc()
 }
 
-func (client *AgentClient) CloseWithError(e error) (err error) {
+func (client *Client) CloseWithError(e error) (err error) {
 	if err == nil {
 		err = io.EOF
 	}
@@ -363,7 +354,7 @@ func (client *AgentClient) CloseWithError(e error) (err error) {
 		})
 		ctx := metadata.NewContext(client.ctx, md)
 		req := &agent.Empty{}
-		_, e := client.raw.Bye(ctx, req)
+		_, e := client.cc.Bye(ctx, req)
 		if e != nil {
 			err = e
 		}
@@ -372,9 +363,9 @@ func (client *AgentClient) CloseWithError(e error) (err error) {
 	client.cancel(err)		// Will trigger all the stream object is canceled
 	client.waitGroup.Wait()
 
-	return err
+	return client.cc.Close()
 }
 
-func (client *AgentClient) Close() (err error) {
+func (client *Client) Close() (err error) {
 	return client.CloseWithError(nil)
 }

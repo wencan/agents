@@ -20,7 +20,7 @@ type Session struct {
 	done     chan struct{}
 }
 
-func NewSessionInfo() *Session {
+func newSessionInfo() *Session {
 	return &Session{
 		lastKeep: time.Now(),
 		proxies: make(map[string]net.Conn),
@@ -28,7 +28,7 @@ func NewSessionInfo() *Session {
 	}
 }
 
-type AgentServer struct {
+type Server struct {
 	guard      Guard //auth
 
 	slocker    sync.Mutex
@@ -37,8 +37,8 @@ type AgentServer struct {
 	pingTicker *time.Ticker
 }
 
-func NewAgentServer(guard Guard) *AgentServer {
-	srv := &AgentServer{
+func NewServer(guard Guard) *Server {
+	srv := &Server{
 		guard: guard,
 		sessions: make(map[string]*Session, 10),
 		pingTicker: time.NewTicker(defaultPingCheckDelay),
@@ -49,7 +49,7 @@ func NewAgentServer(guard Guard) *AgentServer {
 	return srv
 }
 
-func (srv *AgentServer) ListenAndServe(network, address string, opts ...grpc.ServerOption) (err error) {
+func (srv *Server) ListenAndServe(network, address string, opts ...grpc.ServerOption) (err error) {
 	listener, err := net.Listen(network, address)
 	if err != nil {
 		return err
@@ -65,7 +65,7 @@ func (srv *AgentServer) ListenAndServe(network, address string, opts ...grpc.Ser
 	return nil
 }
 
-func (srv *AgentServer) Hello(ctx context.Context, req *agent.HelloRequest) (reply *agent.HelloReply, err error) {
+func (srv *Server) Hello(ctx context.Context, req *agent.HelloRequest) (reply *agent.HelloReply, err error) {
 	if req.Major != versionMajor && req.Minor != versionMinor {
 		return nil, gerrVersionNotSupported
 	}
@@ -77,7 +77,7 @@ func (srv *AgentServer) Hello(ctx context.Context, req *agent.HelloRequest) (rep
 
 	if srv.guard == nil {
 		session := uuid.New()
-		sInfo := NewSessionInfo()
+		sInfo := newSessionInfo()
 
 		srv.slocker.Lock()
 		srv.sessions[session] = sInfo
@@ -94,7 +94,7 @@ func (srv *AgentServer) Hello(ctx context.Context, req *agent.HelloRequest) (rep
 	return reply, nil
 }
 
-func (srv *AgentServer) Auth(ctx context.Context, req *agent.AuthRequest) (reply *agent.AuthReply, err error) {
+func (srv *Server) Auth(ctx context.Context, req *agent.AuthRequest) (reply *agent.AuthReply, err error) {
 	if srv.guard == nil {
 		return nil, gerrOther
 	}
@@ -109,7 +109,7 @@ func (srv *AgentServer) Auth(ctx context.Context, req *agent.AuthRequest) (reply
 	}
 
 	session := uuid.New()
-	sInfo := NewSessionInfo()
+	sInfo := newSessionInfo()
 
 	srv.slocker.Lock()
 	srv.sessions[session] = sInfo
@@ -124,7 +124,7 @@ func (srv *AgentServer) Auth(ctx context.Context, req *agent.AuthRequest) (reply
 	return reply, nil
 }
 
-func (srv *AgentServer) Bind(ctx context.Context, req *agent.BindRequest) (reply *agent.BindReply, err error) {
+func (srv *Server) Bind(ctx context.Context, req *agent.BindRequest) (reply *agent.BindReply, err error) {
 	var parent string
 	if md, ok := metadata.FromContext(ctx); ok {
 		ss := md["session"]
@@ -147,7 +147,7 @@ func (srv *AgentServer) Bind(ctx context.Context, req *agent.BindRequest) (reply
 	}
 
 	session = uuid.New()
-	sInfo = NewSessionInfo()
+	sInfo = newSessionInfo()
 	srv.sessions[session] = sInfo
 
 	reply = &agent.BindReply{
@@ -157,7 +157,7 @@ func (srv *AgentServer) Bind(ctx context.Context, req *agent.BindRequest) (reply
 	return reply, nil
 }
 
-func (srv *AgentServer) Connect(ctx context.Context, req *agent.ConnectRequest) (reply *agent.ConnectReply, err error) {
+func (srv *Server) Connect(ctx context.Context, req *agent.ConnectRequest) (reply *agent.ConnectReply, err error) {
 	var session string
 	if md, ok := metadata.FromContext(ctx); ok {
 		ss := md["session"]
@@ -208,7 +208,7 @@ func (srv *AgentServer) Connect(ctx context.Context, req *agent.ConnectRequest) 
 
 //bidirection stream procedure
 //client must ack
-func (srv *AgentServer) Exchange(stream agent.Agent_ExchangeServer) (err error) {
+func (srv *Server) Exchange(stream agent.Agent_ExchangeServer) (err error) {
 	var session string
 	var channel string
 	if md, ok := metadata.FromContext(stream.Context()); ok {
@@ -250,7 +250,7 @@ func (srv *AgentServer) Exchange(stream agent.Agent_ExchangeServer) (err error) 
 		return err
 	}
 
-	pipe := NewStreamPipe(context.Background(), stream)
+	pipe := NewStreamPipe(stream, nil)
 
 	//proxy
 	//until error(contain eof)
@@ -258,7 +258,7 @@ func (srv *AgentServer) Exchange(stream agent.Agent_ExchangeServer) (err error) 
 }
 
 //call procedure
-func (srv *AgentServer) Heartbeat(ctx context.Context, ping *agent.Ping) (pong *agent.Pong, err error) {
+func (srv *Server) Heartbeat(ctx context.Context, ping *agent.Ping) (pong *agent.Pong, err error) {
 	var session string
 	if md, ok := metadata.FromContext(ctx); ok {
 		ss := md["session"]
@@ -285,7 +285,7 @@ func (srv *AgentServer) Heartbeat(ctx context.Context, ping *agent.Ping) (pong *
 	return pong, err
 }
 
-func (srv *AgentServer) Bye(ctx context.Context, req *agent.Empty) (reply *agent.Empty, err error) {
+func (srv *Server) Bye(ctx context.Context, req *agent.Empty) (reply *agent.Empty, err error) {
 	var session string
 	if md, ok := metadata.FromContext(ctx); ok {
 		ss := md["session"]
@@ -315,7 +315,7 @@ func (srv *AgentServer) Bye(ctx context.Context, req *agent.Empty) (reply *agent
 	return &agent.Empty{}, err
 }
 
-func (srv *AgentServer) checkAndRemove() {
+func (srv *Server) checkAndRemove() {
 	srv.slocker.Lock()
 	defer srv.slocker.Unlock()
 
@@ -335,7 +335,7 @@ func (srv *AgentServer) checkAndRemove() {
 	}
 }
 
-func (srv *AgentServer) checkLoop() {
+func (srv *Server) checkLoop() {
 	for _ = range srv.pingTicker.C {
 		srv.checkAndRemove()
 	}
