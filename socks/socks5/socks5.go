@@ -237,33 +237,40 @@ func (self Server) writeReply(conn net.Conn, addr net.Addr, e error) (err error)
 
 	var (
 		host string
+		ip net.IP
+		port uint16
+
 		sport string
+		atyp byte
+		nport int
 	)
-	if host, sport, err = net.SplitHostPort(addr.String()); err != nil {
-		return
-	}
-
-	ip := net.ParseIP(host)
-
-	var atyp byte
-	if ip == nil {
-		atyp = 0x03        //domain
+	host, sport, err = net.SplitHostPort(addr.String())
+	if err != nil {
+		//dummy
+		atyp = 0x03
+		host = addr.String()
+		port = 0
 	} else {
-		if ip = ip.To4(); ip != nil {
-			atyp = 0x01        //IPv4
-		} else if ip = ip.To16(); ip != nil {
-			atyp = 0x04        //IPv6
+		ip = net.ParseIP(host)
+
+		if ip == nil {
+			atyp = 0x03        //domain
 		} else {
-			err = errors.New("local address error")
+			if ip = ip.To4(); ip != nil {
+				atyp = 0x01        //IPv4
+			} else if ip = ip.To16(); ip != nil {
+				atyp = 0x04        //IPv6
+			} else {
+				err = errors.New("local address error")
+				return
+			}
+		}
+
+		if nport, err = net.LookupPort(addr.Network(), sport); err != nil {
 			return
 		}
+		port = uint16(nport)
 	}
-
-	var nport int
-	if nport, err = net.LookupPort(addr.Network(), sport); err != nil {
-		return
-	}
-	port := uint16(nport)
 
 	//write version, rep, reserved, address type
 	head := []byte{
