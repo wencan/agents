@@ -11,5 +11,5 @@ const (
 	defaultPingCheckDelay time.Duration = time.Minute
 	defaultPacketMaxBytes int = 1024 * 512
 	defaultAckMaxDelay time.Duration = 10 * time.Second
-	defaultAckCheckDelay time.Duration = 10 * time.Second
+	defaultAckCheckDelay time.Duration = 15 * time.Second
 )

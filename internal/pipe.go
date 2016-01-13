@@ -16,10 +16,17 @@ import (
 )
 
 const (
+	PipeChannelBuffSize int = 10
+	PipeAcksMaxSize int = 100
+	PipeAcksPushDelay time.Duration = time.Second
+)
+
+const (
 	selectInPackets = iota
 	selectReads
 	selectOutPackets
 	selectWrites
+	selectAcksPush
 	selectAckChecker
 	selectContext
 	selectDefault
@@ -52,34 +59,35 @@ func newUnAck(no uint32) *unAck {
 
 //wrap grpc stream as net.Conn
 type StreamPipe struct {
-	ctx        context.Context
-	cancelFunc context.CancelFunc
+	ctx         context.Context
+	cancelFunc  context.CancelFunc
 
-	raw        agentStream
-	cc         *ClientConn		//may is nil
+	raw         agentStream
+	cc          *ClientConn //may is nil
 
-	waitGroup  sync.WaitGroup
+	waitGroup   sync.WaitGroup
 
-	inPackets  chan *agent.DataPacket
-	outPackets chan *agent.DataPacket
+	inPackets   chan *agent.DataPacket
+	outPackets  chan *agent.DataPacket
 
-	readCache  [][]byte
-	outCache   []*agent.DataPacket
+	readCache   [][]byte
+	outCache    []*agent.DataPacket
 
-	reads      chan []byte
-	writes     chan []byte
+	reads       chan []byte
+	writes      chan []byte
 
-	acks       []uint32
-	unAcks     []*unAck
+	acks        []uint32
+	unAcks      []*unAck
 
-	wBuffer    bytes.Buffer
-	rBuffer    bytes.Buffer
+	wBuffer     bytes.Buffer
+	rBuffer     bytes.Buffer
 
-	err        unsafe.Pointer
+	err         unsafe.Pointer
 
-	ackChecker *time.Ticker
+	acksChecker *time.Ticker
+	acksPusher  *time.Ticker
 
-	serial     uint32
+	serial      uint32
 }
 
 func NewStreamPipe(stream agentStream) *StreamPipe {
@@ -88,11 +96,12 @@ func NewStreamPipe(stream agentStream) *StreamPipe {
 		ctx: ctx,
 		cancelFunc:cancelFunc,
 		raw: stream,
-		inPackets: make(chan *agent.DataPacket, 10),
-		outPackets: make(chan *agent.DataPacket, 10),
-		reads: make(chan []byte, 10),
-		writes: make(chan []byte, 10),
-		ackChecker: time.NewTicker(defaultAckCheckDelay),
+		inPackets: make(chan *agent.DataPacket, PipeChannelBuffSize),
+		outPackets: make(chan *agent.DataPacket, PipeChannelBuffSize),
+		reads: make(chan []byte, PipeChannelBuffSize),
+		writes: make(chan []byte, PipeChannelBuffSize),
+		acksPusher: time.NewTicker(PipeAcksPushDelay),
+		acksChecker: time.NewTicker(defaultAckCheckDelay),
 	}
 
 	pipe.waitGroup.Add(3)
@@ -225,8 +234,9 @@ func (pipe *StreamPipe) preparePacket(first []byte) (packet *agent.DataPacket, e
 		}
 	}
 
-	packet.Acks = pipe.acks
-	pipe.acks = []uint32{}
+	uplimit := intMin(len(pipe.acks), PipeAcksMaxSize)
+	packet.Acks = pipe.acks[:uplimit]
+	pipe.acks = pipe.acks[uplimit:]
 
 	if len(packet.Buff) > 0 {
 		unack := newUnAck(packet.No)
@@ -259,14 +269,6 @@ func (pipe *StreamPipe) handleInPacket(packet *agent.DataPacket) (err error) {
 		if packet.Acks[idx] != unack.no {
 			err = errors.New("ack missmatch")
 			return
-		}
-	}
-
-	//send ack
-	if len(pipe.acks) > 0 {
-		err = pipe.handleWrite(nil)
-		if err != nil {
-			return err
 		}
 	}
 
@@ -322,10 +324,17 @@ func (pipe *StreamPipe) selectCases(block bool) (label int, err error) {
 	})
 	labels = append(labels, selectWrites)
 
+	//pipe.acksPusher
+	cases = append(cases, reflect.SelectCase{
+		Dir: reflect.SelectRecv,
+		Chan: reflect.ValueOf(pipe.acksPusher.C),
+	})
+	labels = append(labels, selectAcksPush)
+
 	//pipe.ackChecker
 	cases = append(cases, reflect.SelectCase{
 		Dir: reflect.SelectRecv,
-		Chan: reflect.ValueOf(pipe.ackChecker.C),
+		Chan: reflect.ValueOf(pipe.acksChecker.C),
 	})
 	labels = append(labels, selectAckChecker)
 
@@ -378,6 +387,8 @@ func (pipe *StreamPipe) selectCases(block bool) (label int, err error) {
 		}
 		buff := recv.Interface().([]byte)
 		err = pipe.handleWrite(buff)
+	case selectAcksPush:
+		err = pipe.handleWrite(nil)
 	case selectAckChecker:
 		err = pipe.ackCheck()
 	case selectReads:
@@ -391,6 +402,7 @@ func (pipe *StreamPipe) selectCases(block bool) (label int, err error) {
 	return
 }
 
+//main loop
 func (pipe *StreamPipe) loop() {
 	defer pipe.waitGroup.Done()
 
@@ -510,6 +522,9 @@ func (pipe *StreamPipe) CloseWithError(e error) (err error) {
 		e = io.EOF
 	}
 	pipe.cancel(e)
+
+	pipe.acksChecker.Stop()
+	pipe.acksPusher.Stop()
 
 	pipe.waitGroup.Wait()
 
