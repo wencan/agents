@@ -315,13 +315,11 @@ func (pipe *StreamPipe) handleCommand(cmd *command) (err error) {
 	case cmdPushAck:
 		pipe.acks = append(pipe.acks, cmd.inAcks...)
 		if len(pipe.writes) == 0 {
-			//non-blocking
-			go func() {
-				select {
-				case pipe.writeFlush <- 1:
-				case <- pipe.ctx.Done():
-				}
-			}()
+			//Do not repeat flush
+			select {
+			case pipe.writeFlush <- 1:
+			default:
+			}
 		}
 	case cmdPullAck:
 		uplimit := intMin(len(pipe.acks), PipeAcksMaxSize)
