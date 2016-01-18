@@ -104,7 +104,7 @@ func main() {
 			//now := <- time.After(time.Millisecond * 1000)
 			//now := time.Now()
 			//bytes := []byte(now.String())
-			bytes := []byte(context)
+			bytes := []byte(blob)
 
 			_, err := conn.Write(bytes)
 			if err != nil {
