@@ -16,10 +16,12 @@ func main() {
 
 	//enable snappy compress
 	if c, err := codec.New("snappy"); err != nil {
-		log.Fatalln(err)
+		log.Println(err)
+		return
 	} else {
 		if cc, err := codec.WithProto(c); err != nil {
-			log.Fatalln(err)
+			log.Println(err)
+			return
 		} else {
 			opts = append(opts, grpc.WithCodec(cc))
 		}
@@ -27,7 +29,8 @@ func main() {
 
 	client, err := internal.NewClient("127.0.0.1:8080", nil, opts...)
 	if err != nil {
-		log.Fatalln(err)
+		log.Println(err)
+		return
 	}
 	defer client.Close()
 
@@ -45,7 +48,8 @@ func main() {
 	for _, website := range websites {
 		buff, err := get(&httpc, website)
 		if err != nil {
-			log.Fatalln(err)
+			log.Println(err)
+			break
 		}
 
 		log.Println(string(buff))
