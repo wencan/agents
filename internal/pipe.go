@@ -421,12 +421,16 @@ func (pipe*StreamPipe) cancel(err error) {
 func (pipe *StreamPipe) Read(buff []byte) (n int, err error) {
 	for {
 		if pipe.rBuffer.Len() > 0 {
-			n, err = pipe.rBuffer.Read(buff)
+			var nr int
+			nr, err = pipe.rBuffer.Read(buff)
+			n += nr
 
 			//full
-			if n == len(buff) {
+			if nr == len(buff) {
 				return n, err
 			}
+
+			buff = buff[nr:]
 
 			//non-block
 			select {
