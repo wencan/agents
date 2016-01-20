@@ -64,7 +64,7 @@ message ConnectReply {
 message DataPacket {
     uint32 No = 1;      //packet sn
 
-    bytes buff = 2;
+    bytes buf = 2;
 
     repeated uint32 acks = 4;         //packets sn
 }

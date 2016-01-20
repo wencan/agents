@@ -19,6 +19,8 @@ const (
 	PipeAcksMaxSize int = 100
 )
 
+var bufPool *BufPool = NewBufPool(1024 * 1024 * 1024)
+
 func intMin(x, y int) int {
 	if x < y {
 		return x
@@ -66,20 +68,20 @@ type StreamPipe struct {
 	cc          *ClientConn //may is nil
 
 	waitGroup   sync.WaitGroup
-	ioComplete	chan int
+	ioComplete  chan int
 
 	reads       chan []byte
 	writes      chan []byte
-	writeable	chan int
-	writeFlush	chan int
+	writeable   chan int
+	writeFlush  chan int
 
-	cmds		chan *command
+	cmds        chan *command
 
 	acks        []uint32
 	unAcks      []*unAck
 
 	wBuffer     bytes.Buffer
-	rBuffer     bytes.Buffer
+	rCache      bytes.Buffer
 
 	err         unsafe.Pointer
 
@@ -123,17 +125,18 @@ func (pipe *StreamPipe) incrSerial() uint32 {
 	return pipe.serial
 }
 
-func (pipe *StreamPipe) newPacket() *agent.DataPacket {
-	return &agent.DataPacket{
+func (pipe *StreamPipe) newPacket() (packet *agent.DataPacket) {
+	packet = &agent.DataPacket{
 		No: pipe.incrSerial(),
 	}
+	return
 }
 
 func (pipe *StreamPipe) readLoop() {
 	defer func() {
 		pipe.waitGroup.Done()
 		close(pipe.reads)
-		<- pipe.ioComplete
+		<-pipe.ioComplete
 	}()
 
 	for {
@@ -153,67 +156,94 @@ func (pipe *StreamPipe) readLoop() {
 			pipe.cmds <- cmd
 		}
 
-		//push ack and buff
-		if len(packet.Buff) > 0 {
+		//push ack and buf
+		if len(packet.Buf) > 0 {
 			cmd := &command{
 				cmd: cmdPushAck,
 				inAcks: []uint32{packet.No},
 			}
 			pipe.cmds <- cmd
 
-			pipe.reads <- packet.Buff
+			pipe.reads <- packet.Buf
 		}
 	}
 }
 
 //allow first == nil
 func (pipe *StreamPipe) handleWrite(first []byte) (err error) {
-	if first != nil {
-		_, err = pipe.wBuffer.Write(first)
-		if err != nil {
-			return err
-		}
-	}
-
 	//until no need write
 	FIRST:
 	for {
-		packet := pipe.newPacket()
-		cap := defaultPacketMaxBytes
+		storage := bufPool.Get(defaultPacketMaxBytes)
+		pos := 0
 
-		//until packet is full or no more data
-		SECOND:
-		for cap > 0 {
+		//loop a times
+		//SECOND:
+		for true {
 			if pipe.wBuffer.Len() > 0 {
-				lenght := intMin(cap, pipe.wBuffer.Len())
-				buff := make([]byte, lenght)
-
-				var nr int
-				nr, err = pipe.wBuffer.Read(buff)
+				nr, err := pipe.wBuffer.Read(storage)
 				if err != nil {
 					return err
 				}
-				packet.Buff = append(packet.Buff, buff[:nr]...)
-				cap -= nr
 
-				continue
+				pos += nr
+				if pos == len(storage) {    //full
+					if first != nil && len(first) == 0 {
+						_, err = pipe.wBuffer.Write(first)
+						if err != nil {
+							return err
+						}
+					}
+					break    //SECOND
+				}
 			}
 
-			//non-block
-			select {
-			case buff, ok := <- pipe.writes:
-				if !ok {
-					//pipe.writes is closed
-					break SECOND
+			//now, pipe.wBuffer is empty
+
+			if first != nil && len(first) > 0 {
+				nc := copy(storage[pos:], first)
+				if len(first) > nc {
+					pipe.wBuffer = *bytes.NewBuffer(first[nc:])
+				} else {
+					bufPool.Put(first)
 				}
-				<- pipe.writeable
-				_, err = pipe.wBuffer.Write(buff)
-				if err != nil {
-					return err
+				first = nil
+
+				pos += nc
+				if pos == len(storage) {    //full
+					break    //SECOND
 				}
-			default:
-				break SECOND
 			}
+
+			THIRD:
+			for {
+				//non-block
+				select {
+				case buf, ok := <-pipe.writes:
+					if !ok {
+						//pipe.writes is closed
+						break THIRD
+					}
+					<-pipe.writeable
+
+					nc := copy(storage[pos:], buf)
+
+					if len(buf) > nc {
+						pipe.wBuffer = *bytes.NewBuffer(buf[nc:])
+					} else {
+						bufPool.Put(buf)
+					}
+
+					pos += nc
+					if pos == len(storage) {    //full
+						break THIRD
+					}
+				default:
+					break THIRD
+				}
+			}
+
+			break    //SECOND
 		}
 
 		//request ack
@@ -223,17 +253,23 @@ func (pipe *StreamPipe) handleWrite(first []byte) (err error) {
 		}
 		pipe.cmds <- cmd
 
+		acks := []uint32{}
 		for ack := range cmd.outAcks {
-			packet.Acks = append(packet.Acks, ack)
+			acks = append(acks, ack)
 		}
 
-		if len(packet.Buff) == 0 && len(packet.Acks) == 0 {
+		if pos == 0 && len(acks) == 0 {
 			//no need write
+			bufPool.Put(storage)
 			break FIRST
 		}
 
-		if len(packet.Buff) > 0 {
-			//write out
+		packet := pipe.newPacket()
+		packet.Buf = storage[:pos]
+		packet.Acks = acks
+
+		if pos > 0 {
+			//need ack
 			cmd = &command{
 				cmd: cmdPushUnack,
 				inAcks: []uint32{packet.No},
@@ -242,6 +278,7 @@ func (pipe *StreamPipe) handleWrite(first []byte) (err error) {
 		}
 
 		err = pipe.raw.Send(packet)
+		bufPool.Put(storage)
 		if err != nil {
 			return err
 		}
@@ -253,7 +290,7 @@ func (pipe *StreamPipe) handleWrite(first []byte) (err error) {
 func (pipe *StreamPipe) writeLoop() {
 	defer func() {
 		pipe.waitGroup.Done()
-		<- pipe.ioComplete
+		<-pipe.ioComplete
 	}()
 
 	var err error = nil
@@ -262,19 +299,19 @@ func (pipe *StreamPipe) writeLoop() {
 	FIRST:
 	for {
 		select {
-		case buff, ok := <-pipe.writes:
+		case buf, ok := <-pipe.writes:
 			if !ok {
 				//pipe.writes is closed
 				break FIRST
 			}
 
-			<- pipe.writeable
-			err = pipe.handleWrite(buff)
+			<-pipe.writeable
+			err = pipe.handleWrite(buf)
 			if err != nil {
 				pipe.cancel(err)
 				break FIRST
 			}
-		case <- pipe.writeFlush:
+		case <-pipe.writeFlush:
 			err = pipe.handleWrite(nil)
 			if err != nil {
 				pipe.cancel(err)
@@ -361,11 +398,11 @@ func (pipe *StreamPipe) loop() {
 	FIRST:
 	for {
 		select {
-		case cmd := <- pipe.cmds:
+		case cmd := <-pipe.cmds:
 			err = pipe.handleCommand(cmd)
-		case <- pipe.acksChecker.C:
+		case <-pipe.acksChecker.C:
 			err = pipe.ackCheck()
-		case <- pipe.ctx.Done():
+		case <-pipe.ctx.Done():
 			break FIRST
 		}
 
@@ -375,11 +412,12 @@ func (pipe *StreamPipe) loop() {
 		}
 	}
 
+	//util writerLoop and readLoop exit
 	counting := cap(pipe.ioComplete)
 	SECOND:
 	for {
 		select {
-		case cmd := <- pipe.cmds:
+		case cmd := <-pipe.cmds:
 			if cmd.outAcks != nil {
 				close(cmd.outAcks)
 			}
@@ -418,58 +456,95 @@ func (pipe*StreamPipe) cancel(err error) {
 }
 
 //unsafe
-func (pipe *StreamPipe) Read(buff []byte) (n int, err error) {
-	for {
-		if pipe.rBuffer.Len() > 0 {
-			var nr int
-			nr, err = pipe.rBuffer.Read(buff)
-			n += nr
-
-			//full
-			if nr == len(buff) {
-				return n, err
-			}
-
-			buff = buff[nr:]
-
-			//non-block
-			select {
-			case bs, ok := <-pipe.reads:
-				if !ok {
-					//pipe.reads is closed
-					if n > 0 {
-						return n, nil
-					} else {
-						return n, pipe.Err()
-					}
-				}
-
-				_, err = pipe.rBuffer.Write(bs)
-				if err != nil {
-					return n, err
-				}
-			default:
-			//not more data
-				return n, err
-			}
-
-			//reread
-			continue
-		}
-
-		//block
-		bs, ok := <- pipe.reads
-		if !ok {
-			//pipe.reads is closed
-			if n > 0 {
-				return n, nil
-			} else {
-				return n, pipe.Err()
-			}
-		}
-		_, err = pipe.rBuffer.Write(bs)
+func (pipe *StreamPipe) Read(buf []byte) (n int, err error) {
+	if pipe.rCache.Len() > 0 {
+		n, err = pipe.rCache.Read(buf)
 		if err != nil {
 			return n, err
+		}
+
+		//full or error
+		if n == len(buf) || err != nil {
+			return n, err
+		}
+	}
+
+	//non-block
+	FIRST:
+	for {
+		select {
+		case bs, ok := <-pipe.reads:
+			if !ok {
+				//pipe.reads is closed
+				if n > 0 {
+					return n, nil
+				} else {
+					return n, pipe.Err()
+				}
+			}
+
+			var nc int
+			nc = copy(buf[n:], bs)
+			n += nc
+
+			if nc < len(bs) {    //buf must is full
+				pipe.rCache = *bytes.NewBuffer(bs[nc:])
+			}
+
+		//full or error
+			if n == len(buf) || err != nil {
+				return n, err
+			}
+		default:
+		//non-block
+			break FIRST
+		}
+	}
+
+	if n > 0 {
+		return n, err
+	}
+
+	//wait data coming
+	for {
+		select {
+		case bs, ok := <-pipe.reads:
+			if !ok {
+				//pipe.reads is closed
+				return n, pipe.Err()        //n == 0
+			}
+
+			for {
+				var nc int
+				nc = copy(buf[n:], bs)
+				n += nc
+
+				if nc < len(bs) {    //buf must is full
+					pipe.rCache = *bytes.NewBuffer(bs[nc:])
+				}
+
+				//full or error
+				if n == len(buf) || err != nil {
+					return n, err
+				}
+
+				select {
+				case bs, ok = <-pipe.reads:
+					if !ok {
+						//pipe.reads is closed
+						if n > 0 {
+							return n, nil
+						} else {
+							return n, pipe.Err()
+						}
+					}
+				default:
+				//no more data
+					return n, nil
+				}
+			}
+		case <-pipe.ctx.Done():
+			return n, pipe.Err()    //n == 0
 		}
 	}
 
@@ -477,18 +552,21 @@ func (pipe *StreamPipe) Read(buff []byte) (n int, err error) {
 }
 
 //unsafe
-func (pipe *StreamPipe) Write(buff []byte) (n int, err error) {
+func (pipe *StreamPipe) Write(buf []byte) (n int, err error) {
+	//safe write
 	select {
-	case <- pipe.ctx.Done():
+	case <-pipe.ctx.Done():
 		return 0, pipe.Err()
 	case pipe.writeable <- 1:
-		select {
-		case <- pipe.ctx.Done():
-			return 0, pipe.Err()
-		default:
-			pipe.writes <- buff
-			return len(buff), nil
-		}
+			select {
+			case <-pipe.ctx.Done():
+				return 0, pipe.Err()
+			default:
+				mem := bufPool.Get(len(buf))
+				nc := copy(mem, buf)
+				pipe.writes <- mem
+				return nc, nil
+			}
 	}
 
 	return 0, nil
@@ -526,7 +604,7 @@ func (pipe *StreamPipe) RemoteAddr() net.Addr {
 func (pipe *StreamPipe) SetDeadline(t time.Time) error {
 	go func() {
 		ctx, _ := context.WithDeadline(pipe.ctx, t)
-		<- ctx.Done()
+		<-ctx.Done()
 		pipe.cancel(ctx.Err())
 	}()
 	return nil
