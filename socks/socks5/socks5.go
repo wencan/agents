@@ -8,7 +8,6 @@ import (
 	"errors"
 	"strconv"
 	"encoding/binary"
-	"runtime"
 	"golang.org/x/net/proxy"
 	"time"
 )
@@ -89,17 +88,7 @@ func (self Server) Serve(listener net.Listener) (err error) {
 }
 
 func (self Server) serve(conn net.Conn) {
-	defer func() {
-		conn.Close()
-
-		if r := recover(); r != nil {
-			log.Println(r)
-
-			buff := make([]byte, 512)
-			runtime.Stack(buff, false)
-			log.Println(string(buff))
-		}
-	}()
+	defer conn.Close()
 
 	var err error
 	if err = self.initialize(conn); err != nil {
