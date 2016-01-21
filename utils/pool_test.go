@@ -3,7 +3,6 @@ package utils
 import (
 	"testing"
 	"sync/atomic"
-	"log"
 	"math/rand"
 	"time"
 )
@@ -17,15 +16,12 @@ type poolObj struct {
 func newPoolObj() *poolObj {
 	n := atomic.AddInt32(&poolObjNumber, 1)
 
-	log.Println("New poolObj:", n)
-
 	return &poolObj{
 		number: n,
 	}
 }
 
 func (o *poolObj) Close() {
-	log.Println("Delete poolObj:", o.number)
 }
 
 func _new() interface{} {
@@ -38,33 +34,36 @@ func _delete(x interface{}) {
 }
 
 func TestPool(t *testing.T) {
-	p := NewPool(_new, _delete, 5)
-	defer p.Destory()
+	p := NewPool(_new, _delete, 100)
 
 	objs := []*poolObj{}
+	total := 0
+	after := time.After(time.Minute)
 
 	rand.Seed(int64(time.Now().Nanosecond()))
 	for {
-		n := rand.Intn(100)
-		if n == 99 {
-			for _, obj := range objs {
-				p.Put(obj)
-			}
-			objs = []*poolObj{}
+		n := rand.Intn(2)
 
-			break
-		}
-
-		if n % 2 == 0 {
+		if n % 2 == 0 || len(objs) == 0 {
 			x := p.Get()
 			obj := x.(*poolObj)
 
 			objs = append(objs, obj)
-		} else if len(objs) > 0 {
+
+			total++
+		} else {
 			obj := objs[0]
 			objs = objs[1:]
 
 			p.Put(obj)
+		}
+
+		select {
+		case <- after:
+			t.Log("total:", total)
+			t.Log("objects:", poolObjNumber)
+			return
+		default:
 		}
 	}
 }
