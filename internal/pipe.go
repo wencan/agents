@@ -445,12 +445,12 @@ func (pipe*StreamPipe) cancel(err error) {
 		panic("context: internal error: missing cancel error")
 	}
 
-	atomic.CompareAndSwapPointer(&pipe.err, nil, unsafe.Pointer(&err))
-
-	if pipe.ctx.Err() != nil {
+	ok := atomic.CompareAndSwapPointer(&pipe.err, nil, unsafe.Pointer(&err))
+	if !ok {
 		//already canceled
 		return
 	}
+
 	pipe.cancelFunc()
 	close(pipe.writes)
 }
