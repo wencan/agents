@@ -341,7 +341,7 @@ func (client *Client) cancel(err error) {
 	client.cancelFunc()
 }
 
-func (client *Client) CloseWithError(e error) (err error) {
+func (client *Client) CloseWithError(err error) error {
 	if err == nil {
 		err = io.EOF
 	}
@@ -352,9 +352,9 @@ func (client *Client) CloseWithError(e error) (err error) {
 		})
 		ctx := metadata.NewContext(client.ctx, md)
 		req := &agent.Empty{}
-		_, e := client.cc.Bye(ctx, req)
-		if e != nil {
-			err = e
+		_, er := client.cc.Bye(ctx, req)
+		if er != nil {
+			err = er
 		}
 	}
 

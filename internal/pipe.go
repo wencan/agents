@@ -12,6 +12,7 @@ import (
 	"net"
 	"unsafe"
 	"sync/atomic"
+	"log"
 )
 
 const (
@@ -451,6 +452,8 @@ func (pipe*StreamPipe) cancel(err error) {
 		return
 	}
 
+	log.Println(err)
+
 	pipe.cancelFunc()
 	close(pipe.writes)
 }
@@ -572,11 +575,11 @@ func (pipe *StreamPipe) Write(buf []byte) (n int, err error) {
 	return 0, nil
 }
 
-func (pipe *StreamPipe) CloseWithError(e error) (err error) {
-	if e == nil {
-		e = io.EOF
+func (pipe *StreamPipe) CloseWithError(err error) error {
+	if err == nil {
+		err = io.EOF
 	}
-	pipe.cancel(e)
+	pipe.cancel(err)
 
 	pipe.acksChecker.Stop()
 

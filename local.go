@@ -59,7 +59,7 @@ func deleteClient(x interface{}) {
 }
 
 type PoolDialer struct {
-	Pool      *utils.Pool
+	Pool *utils.Pool
 }
 
 func (pd *PoolDialer) Dial(network, address string) (conn net.Conn, err error) {
