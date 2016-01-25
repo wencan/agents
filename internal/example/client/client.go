@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"io/ioutil"
 	"log"
+	"sync"
 )
 
 func main() {
@@ -43,17 +44,29 @@ func main() {
 	websites := []string{
 		"http://www.example.com",
 		"http://api.ipify.org",
+		"https://www.gnu.org/",
+		"https://www.kernel.org/",
+		"https://www.debian.org/",
 	}
+
+	waitGroup := sync.WaitGroup{}
 
 	for _, website := range websites {
-		buff, err := get(&httpc, website)
-		if err != nil {
-			log.Println(err)
-			break
-		}
+		waitGroup.Add(1)
+		go func() {
+			defer waitGroup.Done()
 
-		log.Println(string(buff))
+			buff, err := get(&httpc, website)
+			if err != nil {
+				log.Println(err)
+				return
+			}
+
+			log.Println(string(buff))
+		}()
 	}
+
+	waitGroup.Wait()
 }
 
 func get(httpc *http.Client, url string) (buff []byte, err error) {

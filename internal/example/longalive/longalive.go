@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"runtime"
 	"sync"
+	"time"
 )
 
 func main() {
@@ -34,48 +35,53 @@ func main() {
 		return
 	}
 
-	var conn net.Conn
-	conn, err = client.Dial("tcp", "127.0.0.1:8888")
-	if err != nil {
-		log.Println(err)
-		return
-	}
-	defer conn.Close()
-
 	var waitGroup sync.WaitGroup
-
-	waitGroup.Add(1)
-	go func() {
-		defer waitGroup.Done()
-
-		buff := make([]byte, 1024)
-
-		for {
-			n, err := conn.Read(buff)
-			if err != nil {
-				log.Println(err)
-				return
-			}
-
-			fmt.Println(string(buff[:n]))
-		}
-	}()
-
-	sender := func() {
-		for {
-			bytes := []byte(blob)
-
-			_, err := conn.Write(bytes)
-			if err != nil {
-				log.Println(err)
-				return
-			}
-		}
-	}
 
 	for i:=0; i<runtime.NumCPU(); i++ {
 		waitGroup.Add(1)
-		go sender()
+
+		go func() {
+			defer waitGroup.Done()
+
+			var conn net.Conn
+			conn, err = client.Dial("tcp", "127.0.0.1:8888")
+			if err != nil {
+				log.Println(err)
+				return
+			}
+			defer conn.Close()
+
+			waitGroup.Add(1)
+			go func() {
+				defer waitGroup.Done()
+
+				buff := make([]byte, 1024)
+
+				for {
+					n, err := conn.Read(buff)
+					if err != nil {
+						log.Println(err)
+						return
+					}
+
+					fmt.Println(string(buff[:n]))
+				}
+			}()
+
+
+			for {
+				bytes := []byte(blob)
+
+				_, err := conn.Write(bytes)
+				if err != nil {
+					log.Println(err)
+					return
+				}
+
+				<- time.After(time.Second)
+			}
+
+		}()
 	}
 
 	waitGroup.Wait()
