@@ -12,7 +12,6 @@ import (
 	"net"
 	"unsafe"
 	"sync/atomic"
-	"log"
 )
 
 const (
@@ -73,7 +72,6 @@ type StreamPipe struct {
 
 	reads       chan []byte
 	writes      chan []byte
-	writeable   chan int
 	writeFlush  chan int
 
 	cmds        chan *command
@@ -100,7 +98,6 @@ func NewStreamPipe(stream agentStream) *StreamPipe {
 		ioComplete: make(chan int, 2),
 		reads: make(chan []byte, PipeChannelBuffSize),
 		writes: make(chan []byte, PipeChannelBuffSize),
-		writeable: make(chan int, PipeChannelBuffSize),
 		writeFlush: make(chan int, 1),
 		cmds: make(chan *command, PipeChannelBuffSize),
 		acksChecker: time.NewTicker(defaultAckCheckDelay),
@@ -171,6 +168,7 @@ func (pipe *StreamPipe) readLoop() {
 }
 
 //allow first == nil
+//until no more data
 func (pipe *StreamPipe) handleWrite(first []byte) (err error) {
 	//until no need write
 	FIRST:
@@ -220,13 +218,7 @@ func (pipe *StreamPipe) handleWrite(first []byte) (err error) {
 			for {
 				//non-block
 				select {
-				case buf, ok := <-pipe.writes:
-					if !ok {
-						//pipe.writes is closed
-						break THIRD
-					}
-					<-pipe.writeable
-
+				case buf := <-pipe.writes:
 					nc := copy(storage[pos:], buf)
 
 					if len(buf) > nc {
@@ -300,19 +292,19 @@ func (pipe *StreamPipe) writeLoop() {
 	FIRST:
 	for {
 		select {
-		case buf, ok := <-pipe.writes:
-			if !ok {
-				//pipe.writes is closed
-				break FIRST
-			}
-
-			<-pipe.writeable
+		case buf := <-pipe.writes:
 			err = pipe.handleWrite(buf)
 			if err != nil {
 				pipe.cancel(err)
 				break FIRST
 			}
 		case <-pipe.writeFlush:
+			err = pipe.handleWrite(nil)
+			if err != nil {
+				pipe.cancel(err)
+				break FIRST
+			}
+		case <- pipe.ctx.Done():
 			err = pipe.handleWrite(nil)
 			if err != nil {
 				pipe.cancel(err)
@@ -452,10 +444,7 @@ func (pipe*StreamPipe) cancel(err error) {
 		return
 	}
 
-	log.Println(err)
-
 	pipe.cancelFunc()
-	close(pipe.writes)
 }
 
 //unsafe
@@ -556,20 +545,14 @@ func (pipe *StreamPipe) Read(buf []byte) (n int, err error) {
 
 //unsafe
 func (pipe *StreamPipe) Write(buf []byte) (n int, err error) {
-	//safe write
 	select {
-	case <-pipe.ctx.Done():
+	case <- pipe.ctx.Done():
 		return 0, pipe.Err()
-	case pipe.writeable <- 1:
-			select {
-			case <-pipe.ctx.Done():
-				return 0, pipe.Err()
-			default:
-				mem := bufPool.Get(len(buf))
-				nc := copy(mem, buf)
-				pipe.writes <- mem
-				return nc, nil
-			}
+	default:
+		mem := bufPool.Get(len(buf))
+		nc := copy(mem, buf)
+		pipe.writes <- mem
+		return nc, nil
 	}
 
 	return 0, nil
