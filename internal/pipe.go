@@ -177,7 +177,7 @@ func (pipe *StreamPipe) handleWrite(first []byte) (err error) {
 		pos := 0
 
 		//loop a times
-		//SECOND:
+		SECOND:
 		for true {
 			if pipe.wBuffer.Len() > 0 {
 				nr, err := pipe.wBuffer.Read(storage)
@@ -214,7 +214,6 @@ func (pipe *StreamPipe) handleWrite(first []byte) (err error) {
 				}
 			}
 
-			THIRD:
 			for {
 				//non-block
 				select {
@@ -229,10 +228,10 @@ func (pipe *StreamPipe) handleWrite(first []byte) (err error) {
 
 					pos += nc
 					if pos == len(storage) {    //full
-						break THIRD
+						break SECOND
 					}
 				default:
-					break THIRD
+					break SECOND
 				}
 			}
 
@@ -253,6 +252,7 @@ func (pipe *StreamPipe) handleWrite(first []byte) (err error) {
 
 		if pos == 0 && len(acks) == 0 {
 			//no need write
+			//return
 			bufPool.Put(storage)
 			break FIRST
 		}
@@ -306,16 +306,20 @@ func (pipe *StreamPipe) writeLoop() {
 			}
 		case <- pipe.ctx.Done():
 			err = pipe.handleWrite(nil)
-			if err != nil {
-				pipe.cancel(err)
-				break FIRST
-			}
+			break FIRST
 		}
 	}
 
 	if err != nil {
 		//discard packet
-		for _ = range pipe.writes {}
+		SECOND:
+		for {
+			select {
+			case <- pipe.writes:
+			default:
+				break SECOND
+			}
+		}
 	} else {
 		//client actively close the stream
 		//server wait for the peer to close the stream
