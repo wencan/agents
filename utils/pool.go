@@ -82,7 +82,13 @@ func (p *Pool) Put(x interface{}) {
 }
 
 func (p *Pool) Cleanup() {
-	for x := range p.storage {
-		p.delete(x)
+	DONE:
+	for {
+		select {
+		case x := <- p.storage:
+			p.delete(x)
+		default:
+			break DONE
+		}
 	}
 }
