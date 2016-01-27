@@ -9,6 +9,7 @@ import (
 	"google.golang.org/grpc/credentials"
 	"log"
 	"net"
+	"fmt"
 )
 
 const (
@@ -66,6 +67,7 @@ func (pd *PoolDialer) Dial(network, address string) (conn net.Conn, err error) {
 	dialer := pd.Pool.Get().(*internal.Client)
 	defer pd.Pool.Put(dialer)
 
+	log.Println("Dial", fmt.Sprintf("%s/%s", network, address))
 	return dialer.Dial(network, address)
 }
 
