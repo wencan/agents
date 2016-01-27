@@ -42,7 +42,7 @@ func newClient() (x interface{}){
 	opts = append(opts, grpc.WithCodec(cc))
 
 	var client *internal.Client
-	client, err = internal.NewClient(*server, nil, opts...)
+	client, err = internal.NewClient(*server, opts...)
 	if err != nil {
 		log.Fatalln(err)
 	}
@@ -64,9 +64,9 @@ type PoolDialer struct {
 
 func (pd *PoolDialer) Dial(network, address string) (conn net.Conn, err error) {
 	dialer := pd.Pool.Get().(*internal.Client)
-	conn, err = dialer.Dial(network, address)
-	pd.Pool.Put(dialer)
-	return
+	defer pd.Pool.Put(dialer)
+
+	return dialer.Dial(network, address)
 }
 
 func run_as_local() {

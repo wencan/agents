@@ -6,7 +6,7 @@ import (
 	"google.golang.org/grpc"
 	"log"
 	"net"
-	"fmt"
+//	"fmt"
 	"runtime"
 	"sync"
 	"time"
@@ -29,27 +29,27 @@ func main() {
 		}
 	}
 
-	client, err := internal.NewClient("127.0.0.1:8080", nil, opts...)
+	client, err := internal.NewClient("127.0.0.1:8080", opts...)
 	if err != nil {
 		log.Println(err)
 		return
 	}
+	defer client.Close()
 
 	var waitGroup sync.WaitGroup
 
 	for i:=0; i<runtime.NumCPU(); i++ {
 		waitGroup.Add(1)
 
-		go func() {
+		go func(i int) {
 			defer waitGroup.Done()
 
 			var conn net.Conn
 			conn, err = client.Dial("tcp", "127.0.0.1:8888")
 			if err != nil {
-				log.Println(err)
+				log.Println("Dial", err)
 				return
 			}
-			defer conn.Close()
 
 			waitGroup.Add(1)
 			go func() {
@@ -58,17 +58,20 @@ func main() {
 				buff := make([]byte, 1024)
 
 				for {
-					n, err := conn.Read(buff)
+					_, err := conn.Read(buff)
 					if err != nil {
 						log.Println(err)
 						return
 					}
 
-					fmt.Println(string(buff[:n]))
+					//fmt.Println(string(buff[:n]))
 				}
 			}()
 
+			done := time.After(time.Second * 3 * time.Duration(i))
+			//done := make(chan struct{})
 
+			DONE:
 			for {
 				bytes := []byte(blob)
 
@@ -78,10 +81,19 @@ func main() {
 					return
 				}
 
-				<- time.After(time.Second)
+				select {
+				case <- done:
+					break DONE
+				default:
+				}
 			}
 
-		}()
+			err := conn.Close()
+			if err != nil {
+				log.Println(err)
+			}
+
+		}(i)
 	}
 
 	waitGroup.Wait()

@@ -2,7 +2,6 @@ package internal
 
 import (
 	"io"
-	"log"
 )
 
 func IoExchange(a, b io.ReadWriteCloser, done chan struct{}) (err error) {
@@ -25,10 +24,6 @@ func IoExchange(a, b io.ReadWriteCloser, done chan struct{}) (err error) {
 		}
 
 		<-ch
-
-		if err != nil {
-			log.Println(err)
-		}
 	case <-done:			//session done
 		a.Close()
 		b.Close()

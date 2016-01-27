@@ -3,13 +3,14 @@ package internal
 import (
 	"../agent"
 	"golang.org/x/net/context"
-	"code.google.com/p/go-uuid/uuid"
+	"github.com/pborman/uuid"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
 	"time"
 	"sync"
 	"net"
 	"log"
+	"fmt"
 )
 
 type Session struct {
@@ -29,17 +30,14 @@ func newSessionInfo() *Session {
 }
 
 type Server struct {
-	guard      Guard //auth
-
 	slocker    sync.Mutex
 	sessions   map[string]*Session
 
 	pingTicker *time.Ticker
 }
 
-func NewServer(guard Guard) *Server {
+func NewServer() *Server {
 	srv := &Server{
-		guard: guard,
 		sessions: make(map[string]*Session, 10),
 		pingTicker: time.NewTicker(defaultPingCheckDelay),
 	}
@@ -75,39 +73,6 @@ func (srv *Server) Hello(ctx context.Context, req *agent.HelloRequest) (reply *a
 		Minor: versionMinor,
 	}
 
-	if srv.guard == nil {
-		session := uuid.New()
-		sInfo := newSessionInfo()
-
-		srv.slocker.Lock()
-		srv.sessions[session] = sInfo
-		srv.slocker.Unlock()
-
-		reply.AuthMethod = agent.AuthMethod_NoAuth
-		reply.Session = session
-
-		log.Println("New session:", session)
-	} else {
-		reply.AuthMethod = srv.guard.Type()
-	}
-
-	return reply, nil
-}
-
-func (srv *Server) Auth(ctx context.Context, req *agent.AuthRequest) (reply *agent.AuthReply, err error) {
-	if srv.guard == nil {
-		return nil, ErrArgsInvaild
-	}
-
-	ok := false
-	ok, err = srv.guard.AuthFromProto(req)
-	if err != nil {
-		return nil, err
-	}
-	if !ok {
-		return nil, ErrUnauthenticated
-	}
-
 	session := uuid.New()
 	sInfo := newSessionInfo()
 
@@ -115,44 +80,9 @@ func (srv *Server) Auth(ctx context.Context, req *agent.AuthRequest) (reply *age
 	srv.sessions[session] = sInfo
 	srv.slocker.Unlock()
 
-	reply = &agent.AuthReply{
-		Session: session,
-	}
+	reply.Session = session
 
 	log.Println("New session:", session)
-
-	return reply, nil
-}
-
-func (srv *Server) Bind(ctx context.Context, req *agent.BindRequest) (reply *agent.BindReply, err error) {
-	var parent string
-	if md, ok := metadata.FromContext(ctx); ok {
-		ss := md["session"]
-		if len(ss) >= 1 {
-			parent = ss[0]
-		}
-	}
-	if parent == "" {
-		return nil, ErrSessionLoss
-	}
-
-	var session string
-	var sInfo *Session
-
-	srv.slocker.Lock()
-	defer srv.slocker.Unlock()
-
-	if _, ok := srv.sessions[parent]; !ok {
-		return nil, ErrSessionInvaild
-	}
-
-	session = uuid.New()
-	sInfo = newSessionInfo()
-	srv.sessions[session] = sInfo
-
-	reply = &agent.BindReply{
-		Session: session,
-	}
 
 	return reply, nil
 }
@@ -178,7 +108,7 @@ func (srv *Server) Connect(ctx context.Context, req *agent.ConnectRequest) (repl
 		return nil, err
 	}
 
-	log.Println("Connecting:", req.Remote.Address)
+	log.Println("Connecting:", fmt.Sprintf("%s/%s", req.Remote.Network, req.Remote.Address))
 
 	var conn net.Conn
 	if conn, err = net.Dial(req.Remote.Network, req.Remote.Address); err != nil {
@@ -285,36 +215,6 @@ func (srv *Server) Heartbeat(ctx context.Context, ping *agent.Ping) (pong *agent
 	return pong, err
 }
 
-func (srv *Server) Bye(ctx context.Context, req *agent.Empty) (reply *agent.Empty, err error) {
-	var session string
-	if md, ok := metadata.FromContext(ctx); ok {
-		ss := md["session"]
-		if len(ss) >= 1 {
-			session = ss[0]
-		}
-	}
-	if session == "" {
-		return nil, ErrSessionLoss
-	}
-
-	srv.slocker.Lock()
-	defer srv.slocker.Unlock()
-
-	if sInfo, ok := srv.sessions[session]; !ok {
-		return nil, ErrSessionInvaild
-	} else {
-		close(sInfo.done)
-		delete(srv.sessions, session)
-		for _, proxy := range sInfo.proxies {
-			proxy.Close()
-		}
-
-		log.Println("Byte:", session)
-	}
-
-	return &agent.Empty{}, err
-}
-
 func (srv *Server) checkAndRemove() {
 	srv.slocker.Lock()
 	defer srv.slocker.Unlock()
@@ -329,8 +229,6 @@ func (srv *Server) checkAndRemove() {
 			for _, proxy := range sInfo.proxies {
 				proxy.Close()
 			}
-
-			log.Println("Kick invaild session:", session)
 		}
 	}
 }

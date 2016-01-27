@@ -28,8 +28,6 @@ const (
 type Client struct {
 	cc         *ClientConn
 
-	pass       Passport
-
 	ctx        context.Context
 	cancelFunc context.CancelFunc
 
@@ -46,7 +44,7 @@ type Client struct {
 	err        unsafe.Pointer
 }
 
-func NewClient(target string, pass Passport, opts ...grpc.DialOption) (client *Client, err error) {
+func NewClient(target string, opts ...grpc.DialOption) (client *Client, err error) {
 	cc, err := Dial(target, opts...)
 	if err != nil {
 		return nil, err
@@ -55,7 +53,6 @@ func NewClient(target string, pass Passport, opts ...grpc.DialOption) (client *C
 	ctx, cancelFunc := context.WithCancel(context.Background())
 	client = &Client{
 		cc: cc,
-		pass: pass,
 		ctx: ctx,
 		cancelFunc: cancelFunc,
 		logins: make(chan interface{}, 1),
@@ -125,32 +122,8 @@ func (client *Client) login(ctx context.Context) (err error) {
 		return err
 	}
 
-	if reply.AuthMethod == agent.AuthMethod_NoAuth {
-		client.session = reply.Session
-		client.changeState(Logon)
-	} else {
-		if client.pass == nil {
-			return errors.New("need authenticate")
-		}
-		if reply.AuthMethod != client.pass.Type() {
-			return errors.New("passport type unrecognized")
-		}
-
-		var authReq *agent.AuthRequest
-		authReq, err = client.pass.ToProto()
-		if err != nil {
-			return
-		}
-
-		var authReply *agent.AuthReply
-		authReply, err = client.cc.Auth(ctx, authReq)
-		if err != nil {
-			return
-		}
-
-		client.session = authReply.Session
-		client.changeState(Logon)
-	}
+	client.session = reply.Session
+	client.changeState(Logon)
 
 	return nil
 }
@@ -239,7 +212,7 @@ func (client *Client) Dial(network, address string) (conn net.Conn, err error) {
 		"session": client.session,
 		"channel": reply.Channel,
 	})
-	ctx = metadata.NewContext(client.ctx, md)
+	ctx = metadata.NewContext(context.Background(), md)
 	var stream agent.Agent_ExchangeClient
 	if stream, err = client.cc.Exchange(ctx); err != nil {
 		return nil, err
@@ -332,30 +305,18 @@ func (client *Client) cancel(err error) {
 		panic("AgentClient: internal error: missing cancel error")
 	}
 
-	atomic.CompareAndSwapPointer(&client.err, nil, unsafe.Pointer(&err))
-
-	if client.ctx.Err() != nil {
-		//always canceled
+	ok := atomic.CompareAndSwapPointer(&client.err, nil, unsafe.Pointer(&err))
+	if !ok {
+		//already canceled
 		return
 	}
+
 	client.cancelFunc()
 }
 
 func (client *Client) CloseWithError(err error) error {
 	if err == nil {
 		err = io.EOF
-	}
-
-	if state := client.State(); state == Logon {
-		md := metadata.New(map[string]string{
-			"session": client.session,
-		})
-		ctx := metadata.NewContext(client.ctx, md)
-		req := &agent.Empty{}
-		_, er := client.cc.Bye(ctx, req)
-		if er != nil {
-			err = er
-		}
 	}
 
 	client.cancel(err)

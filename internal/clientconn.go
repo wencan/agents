@@ -35,7 +35,7 @@ func Dial(target string, opts ...grpc.DialOption) (cc *ClientConn, err error) {
 }
 
 func (cc *ClientConn) Ref() int32 {
-	return atomic.AddInt32(cc.ref, 0)
+	return atomic.LoadInt32(cc.ref)
 }
 
 func (cc *ClientConn) Fork() *ClientConn {

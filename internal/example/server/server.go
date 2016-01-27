@@ -17,7 +17,7 @@ func main() {
 		}
 	}()
 
-	srv := internal.NewServer(nil)
+	srv := internal.NewServer()
 	opts := []grpc.ServerOption{}
 
 	//enable snappy decompress

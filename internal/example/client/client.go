@@ -28,7 +28,7 @@ func main() {
 		}
 	}
 
-	client, err := internal.NewClient("127.0.0.1:8080", nil, opts...)
+	client, err := internal.NewClient("127.0.0.1:8080", opts...)
 	if err != nil {
 		log.Println(err)
 		return

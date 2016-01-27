@@ -34,7 +34,7 @@ func run_as_remote() {
 	opts = append(opts, grpc.CustomCodec(cc))
 
 	//listen
-	srv := internal.NewServer(nil)
+	srv := internal.NewServer()
 	err = srv.ListenAndServe("tcp", *listen, opts...)
 	if err != nil {
 		log.Fatalln(err)
