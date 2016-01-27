@@ -3,7 +3,7 @@ package codec
 import (
 	"../agent"
 	"testing"
-	"code.google.com/p/go-uuid/uuid"
+	"github.com/pborman/uuid"
 )
 
 func TestProto(t *testing.T) {

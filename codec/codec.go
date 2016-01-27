@@ -22,7 +22,7 @@ func register(name string, c Codec) error {
 func New(name string) (Codec, error) {
 	c, ok := codecs[name]
 	if !ok {
-		return nil, errors.New(fmt.Sprintf("\"%s\" not found", name))
+		return nil, errors.New(fmt.Sprintf("codec \"%s\" not found", name))
 	}
 	return c, nil
 }
