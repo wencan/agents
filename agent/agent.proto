@@ -2,11 +2,6 @@ syntax = "proto3";
 
 package agent;
 
-enum AuthMethod {
-    NoAuth = 0;
-    UsernamePassword = 1;
-}
-
 message HelloRequest {
     uint32 major = 1;
     uint32 minor = 2;
@@ -16,33 +11,7 @@ message HelloReply {
     uint32 major = 1;
     uint32 minor = 2;
 
-    string session = 3; //if no need auth
-
-    AuthMethod authMethod = 4;
-}
-
-message AuthRequest {
-    oneof one {
-        UsernameAndPassword usernameAndPassword = 1;
-    }
-}
-
-message UsernameAndPassword {
-    string username = 1;
-    string password = 2;
-}
-
-message AuthReply {
-    string session = 1;
-}
-
-//new connection bind
-//metadata: session
-message BindRequest {
-}
-
-message BindReply {
-    string session = 1;
+    string session = 3;
 }
 
 message Address {
@@ -60,7 +29,7 @@ message ConnectReply {
     Address bound = 2;
 }
 
-//metadata: session, channel, [codec]
+//metadata: session, channel
 message DataPacket {
     uint32 No = 1;      //packet sn
 
@@ -82,10 +51,7 @@ message Empty{}
 
 service Agent {
     rpc Hello(HelloRequest) returns (HelloReply) {}
-    rpc Auth(AuthRequest) returns (AuthReply) {}
-    rpc Bind(BindRequest) returns (BindReply) {}
     rpc Connect(ConnectRequest) returns (ConnectReply) {}
     rpc Exchange(stream DataPacket) returns (stream DataPacket) {}
     rpc Heartbeat(Ping) returns (Pong) {}
-    rpc Bye(Empty) returns (Empty) {}
 }
