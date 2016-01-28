@@ -2,7 +2,6 @@ package internal
 
 import (
 	"../agent"
-	. "../utils"
 	"google.golang.org/grpc"
 	"golang.org/x/net/context"
 	"sync"
@@ -14,12 +13,6 @@ import (
 	"unsafe"
 	"sync/atomic"
 )
-
-var bufPool *BufPool
-
-func init() {
-	bufPool = MegaBufPool
-}
 
 const (
 	PipeChannelBuffSize int = 10
@@ -175,10 +168,11 @@ func (pipe *StreamPipe) readLoop() {
 //allow first == nil
 //until no more data
 func (pipe *StreamPipe) handleWrite(first []byte) (err error) {
+	storage := make([]byte, defaultPacketMaxBytes)
+
 	//until no need write
 	FIRST:
 	for {
-		storage := bufPool.Get(defaultPacketMaxBytes)
 		pos := 0
 
 		//loop a times
@@ -208,8 +202,6 @@ func (pipe *StreamPipe) handleWrite(first []byte) (err error) {
 				nc := copy(storage[pos:], first)
 				if len(first) > nc {
 					pipe.wBuffer = *bytes.NewBuffer(first[nc:])
-				} else {
-					bufPool.Put(first)
 				}
 				first = nil
 
@@ -227,8 +219,6 @@ func (pipe *StreamPipe) handleWrite(first []byte) (err error) {
 
 					if len(buf) > nc {
 						pipe.wBuffer = *bytes.NewBuffer(buf[nc:])
-					} else {
-						bufPool.Put(buf)
 					}
 
 					pos += nc
@@ -258,7 +248,6 @@ func (pipe *StreamPipe) handleWrite(first []byte) (err error) {
 		if pos == 0 && len(acks) == 0 {
 			//no need write
 			//return
-			bufPool.Put(storage)
 			break FIRST
 		}
 
@@ -276,7 +265,6 @@ func (pipe *StreamPipe) handleWrite(first []byte) (err error) {
 		}
 
 		err = pipe.raw.Send(packet)
-		bufPool.Put(storage)
 		if err != nil {
 			return err
 		}
@@ -558,7 +546,7 @@ func (pipe *StreamPipe) Write(buf []byte) (n int, err error) {
 	case <- pipe.ctx.Done():
 		return 0, pipe.Err()
 	default:
-		mem := bufPool.Get(len(buf))
+		mem := make([]byte, len(buf))
 		nc := copy(mem, buf)
 		pipe.writes <- mem
 		return nc, nil
