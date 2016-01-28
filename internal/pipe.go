@@ -2,6 +2,7 @@ package internal
 
 import (
 	"../agent"
+	. "../utils"
 	"google.golang.org/grpc"
 	"golang.org/x/net/context"
 	"sync"
@@ -14,12 +15,16 @@ import (
 	"sync/atomic"
 )
 
+var bufPool *BufPool
+
+func init() {
+	bufPool = MegaBufPool
+}
+
 const (
 	PipeChannelBuffSize int = 10
 	PipeAcksMaxSize int = 100
 )
-
-var bufPool *BufPool = NewBufPool(1024 * 1024 * 1024)
 
 func intMin(x, y int) int {
 	if x < y {

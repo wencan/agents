@@ -1,6 +1,12 @@
-package internal
+package utils
 
 import "sync"
+
+var MegaBufPool *BufPool
+
+func init() {
+	MegaBufPool = NewBufPool(1024 * 1024)
+}
 
 type BufPool struct {
 	Uplimit	int
