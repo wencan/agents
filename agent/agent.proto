@@ -47,8 +47,6 @@ message Pong {
     string appData = 1;
 }
 
-message Empty{}
-
 service Agent {
     rpc Hello(HelloRequest) returns (HelloReply) {}
     rpc Connect(ConnectRequest) returns (ConnectReply) {}
