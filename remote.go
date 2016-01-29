@@ -1,13 +1,12 @@
 package main
 
 import (
-	"./internal"
 	"./codec"
+	"./internal"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"log"
 )
-
 
 func run_as_remote() {
 	opts := []grpc.ServerOption{}
