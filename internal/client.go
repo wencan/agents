@@ -184,6 +184,10 @@ func (client *Client) loop() {
 	}
 }
 
+func (client *Client) Multiplexing() int32 {
+	return client.cc.Ref() - 1
+}
+
 func (client *Client) Dial(network, address string) (conn net.Conn, err error) {
 	err = client.Wait(context.Background())
 	if err != nil {
