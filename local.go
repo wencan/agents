@@ -10,11 +10,14 @@ import (
 	"google.golang.org/grpc/credentials"
 	"log"
 	"net"
+	"time"
+	"sync/atomic"
 )
 
 const (
 	clientPoolSize int = 10
 	maxMultiplex   int = 5
+	clientCompactDelay time.Duration = time.Second * 15
 )
 
 func newClient() (client *internal.Client) {
@@ -57,30 +60,55 @@ func deleteClient(client *internal.Client) {
 	}
 }
 
+type dialerRef struct {
+	*internal.Client
+	ref int32
+	dropped bool
+}
+
 type DialerRotation struct {
 	New    func() *internal.Client
 	Delete func(*internal.Client)
 
-	storage chan *internal.Client
-	backoff chan *internal.Client
+	storage chan *dialerRef
+	backoff chan *dialerRef
 }
 
 func NewDialerRotation(new func() *internal.Client, delete func(*internal.Client)) *DialerRotation {
-	return &DialerRotation{
+	rotation := &DialerRotation{
 		New:     new,
 		Delete:  delete,
-		storage: make(chan *internal.Client, clientPoolSize),
-		backoff: make(chan *internal.Client, clientPoolSize),
+		storage: make(chan *dialerRef, clientPoolSize),
+		backoff: make(chan *dialerRef, clientPoolSize),
+	}
+
+	go func(){
+		ticker := time.NewTicker(clientCompactDelay)
+		for range ticker.C {
+			rotation.Compact()
+		}
+	}()
+
+	return rotation
+}
+
+func (rotation *DialerRotation) create() *dialerRef {
+	return &dialerRef{
+		Client: rotation.New(),
 	}
 }
 
-func (rotation *DialerRotation) backoffTry() (dialer *internal.Client) {
+func (roration *DialerRotation) destory(dialer *dialerRef) {
+	go roration.Delete(dialer.Client)
+}
+
+func (rotation *DialerRotation) backoffTry() (dialer *dialerRef) {
 	//staging area
-	staging := []*internal.Client{}
+	staging := []*dialerRef{}
 
 DONE:
 	for {
-		var entry *internal.Client
+		var entry *dialerRef
 		select {
 		case entry = <- rotation.backoff:
 		default:
@@ -94,7 +122,7 @@ DONE:
 				select {
 				case rotation.storage <- entry:
 				default:
-					rotation.Delete(entry)
+					rotation.destory(entry)
 				}
 			}
 		} else {
@@ -106,25 +134,26 @@ DONE:
 		select {
 		case rotation.backoff <- entry:
 		default:
-			rotation.Delete(entry)
+			rotation.destory(entry)
 		}
 	}
 
 	return dialer
 }
 
-func (rotation *DialerRotation) pop() (dialer *internal.Client) {
+func (rotation *DialerRotation) pop() (dialer *dialerRef) {
 	for {
 		select {
 		case dialer = <-rotation.storage:
 			if dialer.Multiplexing() < int32(maxMultiplex) {
+				atomic.AddInt32(&dialer.ref, 1)
 				return dialer
 			} else {
 				select {
 				case rotation.backoff <- dialer:
 				default:
 					//full
-					rotation.Delete(dialer)
+					rotation.destory(dialer)
 				}
 
 				//continue
@@ -132,8 +161,9 @@ func (rotation *DialerRotation) pop() (dialer *internal.Client) {
 		default:
 			dialer = rotation.backoffTry()
 			if dialer == nil {
-				dialer = rotation.New()
+				dialer = rotation.create()
 			}
+			atomic.AddInt32(&dialer.ref, 1)
 			return dialer
 		}
 	}
@@ -141,11 +171,17 @@ func (rotation *DialerRotation) pop() (dialer *internal.Client) {
 	return nil
 }
 
-func (rotation *DialerRotation) push(dialer *internal.Client) {
+func (rotation *DialerRotation) push(dialer *dialerRef) {
+	n := atomic.AddInt32(&dialer.ref, -1)
+	if n == 0 && dialer.dropped{
+		rotation.destory(dialer)
+		return
+	}
+
 	select {
 	case rotation.storage <- dialer:
 	default:
-		rotation.Delete(dialer)
+		rotation.destory(dialer)
 	}
 }
 
@@ -156,10 +192,45 @@ func (rotation *DialerRotation) Dial(network, address string) (conn net.Conn, er
 		panic(errors.New("dialer is nil"))
 	}
 
-	rotation.push(dialer)
+	defer rotation.push(dialer)
 
 	log.Println("Connecting", fmt.Sprintf("%s/%s", network, address))
 	return dialer.Dial(network, address)
+}
+
+func (rotation *DialerRotation) Compact() {
+	staging := []*dialerRef{}
+	var total int32 = 0
+
+	FIRST:
+	for {
+		select {
+		case entry := <- rotation.storage:
+			staging = append(staging, entry)
+			total += entry.Multiplexing()
+		default:
+			break FIRST
+		}
+	}
+
+	max := (total + int32(maxMultiplex) - 1) / int32(maxMultiplex)
+	SECOND:
+	for idx, entry := range staging {
+		if idx <= int(max) {
+			select {
+			case rotation.storage <- entry:
+				continue SECOND
+			default:
+			}
+		}
+
+		n := atomic.AddInt32(&entry.ref, -1)
+		if n == 0 {
+			rotation.destory(entry)
+		} else {
+			entry.dropped = true
+		}
+	}
 }
 
 func run_as_local() {
