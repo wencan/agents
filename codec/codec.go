@@ -28,13 +28,13 @@ func New(name string) (Codec, error) {
 }
 
 type CodecChan struct {
-	codecs []Codec
+	Codecs []Codec
 }
 
 func (c *CodecChan) Encode(dst, src []byte) ([]byte, error) {
 	data := src
 	var err error
-	for _, codec := range c.codecs {
+	for _, codec := range c.Codecs {
 		data, err = codec.Encode(nil, data)
 		if err != nil {
 			return data, err
@@ -46,8 +46,8 @@ func (c *CodecChan) Encode(dst, src []byte) ([]byte, error) {
 func (c *CodecChan) Decode(dst, src []byte) ([]byte, error) {
 	data := src
 	var err error
-	for i := len(c.codecs) - 1; i >= 0; i-- {
-		codec := c.codecs[i]
+	for i := len(c.Codecs) - 1; i >= 0; i-- {
+		codec := c.Codecs[i]
 		data, err = codec.Decode(nil, data)
 		if err != nil {
 			return data, err
@@ -63,7 +63,7 @@ func NewCodecChan(names []string) (*CodecChan, error) {
 		if err != nil {
 			return nil, err
 		}
-		codecChan.codecs = append(codecChan.codecs, codec)
+		codecChan.Codecs = append(codecChan.Codecs, codec)
 	}
 	return codecChan, nil
 }
