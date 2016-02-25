@@ -3,7 +3,7 @@ package main
 import (
 	"github.com/wencan/agents/codec"
 	"github.com/wencan/agents/internal"
-	"./socks/socks5"
+	"github.com/wencan/agents/socks/socks5"
 	"errors"
 	"fmt"
 	"google.golang.org/grpc"
