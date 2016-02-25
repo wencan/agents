@@ -1,8 +1,8 @@
 package main
 
 import (
-	"./codec"
-	"./internal"
+	"github.com/wencan/agents/codec"
+	"github.com/wencan/agents/internal"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"log"

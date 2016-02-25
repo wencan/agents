@@ -1,7 +1,7 @@
 package internal
 
 import (
-	"../agent"
+	"github.com/wencan/agents/agent"
 	"golang.org/x/net/context"
 	"github.com/pborman/uuid"
 	"google.golang.org/grpc"

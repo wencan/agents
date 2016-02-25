@@ -1,7 +1,7 @@
 package internal
 
 import (
-	"./../agent"
+	"github.com/wencan/agents/agent"
 	"google.golang.org/grpc"
 	"golang.org/x/net/context"
 	"sync/atomic"

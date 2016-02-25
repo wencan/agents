@@ -1,7 +1,7 @@
 package codec
 
 import (
-	"../agent"
+	"github.com/wencan/agents/agent"
 	"testing"
 	"github.com/pborman/uuid"
 )

@@ -1,8 +1,8 @@
 package main
 
 import (
-	"./codec"
-	"./internal"
+	"github.com/wencan/agents/codec"
+	"github.com/wencan/agents/internal"
 	"./socks/socks5"
 	"errors"
 	"fmt"
