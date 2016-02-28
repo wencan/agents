@@ -12,26 +12,28 @@ type Codec interface {
 	Decode(dst, src []byte) ([]byte, error)
 }
 
-var codecs map[string]Codec = make(map[string]Codec)
+type Factory func (...interface{}) (Codec, error)
 
-func register(name string, c Codec) error {
-	codecs[name] = c
+var codecs map[string]Factory = make(map[string]Factory)
+
+func register(name string, f Factory) error {
+	codecs[name] = f
 	return nil
 }
 
-func New(name string) (Codec, error) {
-	c, ok := codecs[name]
+func New(name string, args ...interface{}) (Codec, error) {
+	f, ok := codecs[name]
 	if !ok {
 		return nil, errors.New(fmt.Sprintf("codec \"%s\" not found", name))
 	}
-	return c, nil
+	return f(args)
 }
 
-type CodecChan struct {
+type Chan struct {
 	Codecs []Codec
 }
 
-func (c *CodecChan) Encode(dst, src []byte) ([]byte, error) {
+func (c *Chan) Encode(dst, src []byte) ([]byte, error) {
 	data := src
 	var err error
 	for _, codec := range c.Codecs {
@@ -43,7 +45,7 @@ func (c *CodecChan) Encode(dst, src []byte) ([]byte, error) {
 	return data, nil
 }
 
-func (c *CodecChan) Decode(dst, src []byte) ([]byte, error) {
+func (c *Chan) Decode(dst, src []byte) ([]byte, error) {
 	data := src
 	var err error
 	for i := len(c.Codecs) - 1; i >= 0; i-- {
@@ -56,16 +58,16 @@ func (c *CodecChan) Decode(dst, src []byte) ([]byte, error) {
 	return data, nil
 }
 
-func NewCodecChan(names []string) (*CodecChan, error) {
-	codecChan := &CodecChan{}
+func NewChan(names []string) (*Chan, error) {
+	c := &Chan{}
 	for _, name := range names {
 		codec, err := New(name)
 		if err != nil {
 			return nil, err
 		}
-		codecChan.Codecs = append(codecChan.Codecs, codec)
+		c.Codecs = append(c.Codecs, codec)
 	}
-	return codecChan, nil
+	return c, nil
 }
 
 type withProto struct {

@@ -12,6 +12,10 @@ func (Snappy) Decode(dst, src []byte) ([]byte, error) {
 	return snappy.Decode(dst, src)
 }
 
+func _new_snappy(args ...interface{}) (Codec, error) {
+	return &Snappy{}, nil
+}
+
 func init() {
-	register("snappy", &Snappy{})
+	register("snappy", _new_snappy)
 }
